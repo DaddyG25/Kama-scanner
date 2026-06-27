@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>P-KAMA Scanner</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+:root{
+  --bg:#0b0f13;--surface:#111820;--card:#16202b;--border:#1e2e3d;
+  --accent:#00d8a4;--accent2:#0099ff;--bull:#00d8a4;--bear:#ff4d6d;
+  --warn:#f59e0b;--text:#e2eaf2;--muted:#6b8199;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+
+/* ── Header ── */
+header{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;border-bottom:1px solid var(--border);
+  background:var(--surface);position:sticky;top:0;z-index:100}
+.logo{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent)}
+.logo span{color:var(--muted);font-weight:400}
+.badge{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:20px;
+  font-weight:600;letter-spacing:.04em;border:1px solid}
+.badge.ok{background:rgba(0,216,164,.12);color:var(--accent);border-color:rgba(0,216,164,.3)}
+.badge.no{background:rgba(255,77,109,.1);color:var(--bear);border-color:rgba(255,77,109,.25)}
+
+/* ── Login Banner ── */
+.login-banner{
+  margin:16px;border-radius:12px;overflow:hidden;
+  border:1px solid rgba(0,216,164,.25);
+  background:linear-gradient(135deg,rgba(0,216,164,.08),rgba(0,153,255,.06));
+}
+.login-banner.hidden{display:none}
+.login-inner{padding:20px 16px;display:flex;flex-direction:column;gap:12px}
+.login-title{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700;letter-spacing:.04em}
+.login-desc{font-size:13px;color:var(--muted);line-height:1.6}
+.btn-login{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:14px;background:var(--accent);color:#000;
+  font-family:var(--mono);font-weight:700;font-size:14px;
+  border-radius:8px;text-decoration:none;letter-spacing:.04em;
+  transition:opacity .2s;
+}
+.btn-login:hover{opacity:.85}
+.token-ok-banner{
+  margin:16px;border-radius:12px;padding:14px 16px;
+  background:rgba(0,216,164,.08);border:1px solid rgba(0,216,164,.2);
+  display:flex;align-items:center;gap:10px;font-size:13px;color:var(--accent);
+  font-family:var(--mono);
+}
+.token-ok-banner.hidden{display:none}
+
+/* ── Config card ── */
+.config-card{margin:0 16px 16px;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.cfg-row{display:flex;gap:10px}
+.cfg{display:flex;flex-direction:column;gap:5px;flex:1}
+.cfg label{font-size:10px;font-family:var(--mono);letter-spacing:.09em;
+  color:var(--muted);text-transform:uppercase}
+.cfg input,.cfg select{background:var(--card);border:1px solid var(--border);
+  color:var(--text);padding:10px 12px;border-radius:8px;font-family:var(--mono);
+  font-size:13px;outline:none;width:100%;transition:border-color .2s;
+  -webkit-appearance:none}
+.cfg input:focus,.cfg select:focus{border-color:var(--accent)}
+.cfg select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b8199' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+
+.btn-scan{width:100%;padding:14px;background:var(--accent);color:#000;
+  font-family:var(--mono);font-weight:700;font-size:15px;border:none;
+  border-radius:8px;cursor:pointer;letter-spacing:.06em;transition:opacity .2s}
+.btn-scan:disabled{opacity:.35;cursor:not-allowed}
+.btn-stop{width:100%;padding:12px;background:transparent;color:var(--bear);
+  font-family:var(--mono);font-weight:600;font-size:14px;
+  border:1px solid var(--bear);border-radius:8px;cursor:pointer;display:none}
+
+/* ── Progress ── */
+.prog-wrap{height:3px;background:var(--border);display:none;margin:0 16px}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  width:0%;transition:width .4s}
+
+/* ── Stats ── */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;
+  background:var(--border);margin:16px 16px 0;border-radius:12px;overflow:hidden}
+.stat-box{background:var(--surface);padding:14px;display:flex;flex-direction:column;gap:3px}
+.stat-label{font-size:9px;font-family:var(--mono);letter-spacing:.1em;
+  color:var(--muted);text-transform:uppercase}
+.stat-value{font-family:var(--mono);font-size:20px;font-weight:700}
+.sv-d{color:var(--text)}.sv-w{color:var(--warn)}.sv-b{color:var(--bull)}.sv-r{color:var(--bear)}
+
+/* ── Log ── */
+.log-wrap{margin:12px 16px 0}
+.log-area{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;font-family:var(--mono);font-size:11px;color:var(--muted);
+  height:100px;overflow-y:auto}
+.ll{padding:1px 0}.ll-ok{color:var(--bull)}.ll-err{color:var(--bear)}
+.ll-info{color:var(--accent2)}.ll-warn{color:var(--warn)}
+
+/* ── Filter tabs ── */
+.filter-tabs{display:flex;margin:12px 16px 0;gap:8px}
+.ftab{flex:1;padding:10px;background:var(--surface);border:1px solid var(--border);
+  color:var(--muted);border-radius:8px;font-family:var(--mono);font-size:12px;
+  cursor:pointer;text-align:center;transition:all .2s;letter-spacing:.04em}
+.ftab.fa{border-color:var(--accent);color:var(--accent);background:rgba(0,216,164,.08)}
+.ftab.fb{border-color:var(--bull);color:var(--bull);background:rgba(0,216,164,.08)}
+.ftab.fr{border-color:var(--bear);color:var(--bear);background:rgba(255,77,109,.08)}
+
+/* ── Results ── */
+.results-wrap{margin:12px 16px 24px}
+.results-hdr{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 0;font-family:var(--mono);font-size:11px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.08em}
+
+/* Signal cards (mobile-first) */
+.signal-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:14px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.signal-card.bull{border-left:3px solid var(--bull)}
+.signal-card.bear{border-left:3px solid var(--bear)}
+.card-top{display:flex;align-items:center;justify-content:space-between}
+.card-sym{font-family:var(--mono);font-weight:700;font-size:16px;color:var(--text)}
+.card-sig-bull{font-family:var(--mono);font-size:11px;color:var(--bull);
+  background:rgba(0,216,164,.1);padding:3px 8px;border-radius:4px}
+.card-sig-bear{font-family:var(--mono);font-size:11px;color:var(--bear);
+  background:rgba(255,77,109,.1);padding:3px 8px;border-radius:4px}
+.card-row{display:flex;gap:0}
+.card-stat{flex:1;display:flex;flex-direction:column;gap:2px}
+.cs-label{font-size:9px;font-family:var(--mono);color:var(--muted);
+  text-transform:uppercase;letter-spacing:.08em}
+.cs-value{font-family:var(--mono);font-size:13px;font-weight:600}
+.cv-bull{color:var(--bull)}.cv-bear{color:var(--bear)}.cv-warn{color:var(--warn)}
+.card-spark{display:flex;align-items:center}
+
+/* Empty */
+.empty{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty .icon{font-size:36px;margin-bottom:10px}
+.empty p{font-size:13px}
+
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">P-KAMA<span> / N500</span></div>
+  <span class="badge {% if token_set %}ok{% else %}no{% endif %}" id="tokenBadge">
+    {% if token_set %}✓ LOGGED IN{% else %}NOT LOGGED IN{% endif %}
+  </span>
+</header>
+
+<!-- Login Banner (shown when not logged in) -->
+<div class="login-banner {% if token_set %}hidden{% endif %}" id="loginBanner">
+  <div class="login-inner">
+    <div class="login-title">🔐 Login Required</div>
+    <div class="login-desc">
+      Tap the button below every morning to connect your Zerodha account.
+      Takes just 10 seconds — enter your PIN and you're done.
+    </div>
+    <a class="btn-login" href="{{ login_url }}">
+      ⚡ Login with Zerodha
+    </a>
+  </div>
+</div>
+
+<!-- Token OK Banner -->
+<div class="token-ok-banner {% if not token_set %}hidden{% endif %}" id="tokenOkBanner">
+  ✅ Zerodha connected
+  {% if token_time %}<span style="color:var(--muted);margin-left:8px">{{ token_time }}</span>{% endif %}
+  &nbsp;·&nbsp;<a href="{{ login_url }}" style="color:var(--accent2);text-decoration:none;font-size:11px">Refresh</a>
+</div>
+
+<!-- Config -->
+<div class="config-card">
+  <div class="cfg-row">
+    <div class="cfg">
+      <label>P-KAMA Length</label>
+      <input id="kamaLen" type="number" value="50" min="5" max="300"/>
+    </div>
+    <div class="cfg">
+      <label>Vol Multiplier</label>
+      <input id="volMult" type="number" value="1.5" min="1" max="10" step="0.1"/>
+    </div>
+  </div>
+  <div class="cfg-row">
+    <div class="cfg">
+      <label>Self Powered</label>
+      <select id="selfPowered">
+        <option value="true">Yes (1/ER)</option>
+        <option value="false">No (factor)</option>
+      </select>
+    </div>
+    <div class="cfg" id="factorGroup" style="display:none">
+      <label>Factor</label>
+      <input id="factor" type="number" value="3" min="0.1" max="20" step="0.1"/>
+    </div>
+  </div>
+  <button class="btn-scan" id="scanBtn" onclick="startScan()" {% if not token_set %}disabled{% endif %}>
+    {% if token_set %}▶ START SCAN{% else %}Login First to Scan{% endif %}
+  </button>
+  <button class="btn-stop" id="stopBtn" onclick="stopScan()">■ STOP SCAN</button>
+</div>
+
+<!-- Progress -->
+<div class="prog-wrap" id="progWrap"><div class="prog-fill" id="progFill"></div></div>
+
+<!-- Stats -->
+<div class="stats-grid">
+  <div class="stat-box"><span class="stat-label">Scanned</span><span class="stat-value sv-d" id="sScanned">—</span></div>
+  <div class="stat-box"><span class="stat-label">Signals</span><span class="stat-value sv-w" id="sSignals">—</span></div>
+  <div class="stat-box"><span class="stat-label">▲ Bullish</span><span class="stat-value sv-b" id="sBull">—</span></div>
+  <div class="stat-box"><span class="stat-label">▼ Bearish</span><span class="stat-value sv-r" id="sBear">—</span></div>
+</div>
+
+<!-- Log -->
+<div class="log-wrap">
+  <div class="log-area" id="logArea">
+    <div class="ll ll-info">P-KAMA Scanner ready.{% if not token_set %} Please login with Zerodha first.{% endif %}</div>
+  </div>
+</div>
+
+<!-- Filter tabs -->
+<div class="filter-tabs">
+  <div class="ftab fa" id="fAll"  onclick="setFilter('all')">ALL</div>
+  <div class="ftab"    id="fBull" onclick="setFilter('bull')">▲ BULLISH</div>
+  <div class="ftab"    id="fBear" onclick="setFilter('bear')">▼ BEARISH</div>
+</div>
+
+<!-- Results -->
+<div class="results-wrap">
+  <div class="results-hdr">
+    <span>1H · P-KAMA Cross + High Volume</span>
+    <span id="resCount">0 signals</span>
+  </div>
+  <div id="cardContainer">
+    <div class="empty"><div class="icon">📡</div><p>Run a scan to see signals</p></div>
+  </div>
+</div>
+
+<script>
+let allResults   = [];
+let evtSource    = null;
+let activeFilter = 'all';
+
+function log(msg, cls=''){
+  const area = document.getElementById('logArea');
+  const d = document.createElement('div');
+  d.className = 'll'+(cls?' ll-'+cls:'');
+  d.textContent = `[${new Date().toLocaleTimeString('en-IN')}] ${msg}`;
+  area.appendChild(d);
+  area.scrollTop = area.scrollHeight;
+}
+
+function drawSpark(canvas, closes, kamas, signal){
+  const W=80, H=30;
+  canvas.width=W; canvas.height=H;
+  const ctx=canvas.getContext('2d');
+  const valid=kamas.filter(v=>v!==null);
+  const all=[...closes,...valid];
+  if(!all.length) return;
+  const mn=Math.min(...all), mx=Math.max(...all), rng=mx-mn||1;
+  const xS=W/(closes.length-1);
+  const yP=v=>H-(v-mn)/rng*H;
+  const col=signal==='bullish'?'#00d8a4':'#ff4d6d';
+  ctx.beginPath(); ctx.strokeStyle=col; ctx.lineWidth=1;
+  let first=true;
+  kamas.forEach((v,i)=>{
+    if(v===null) return;
+    first?ctx.moveTo(i*xS,yP(v)):ctx.lineTo(i*xS,yP(v));
+    first=false;
+  });
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle='#e2eaf2'; ctx.lineWidth=1.5;
+  closes.forEach((v,i)=>{i===0?ctx.moveTo(0,yP(v)):ctx.lineTo(i*xS,yP(v));});
+  ctx.stroke();
+  const ci=closes.length-2;
+  ctx.beginPath(); ctx.arc(ci*xS,yP(closes[ci]),3,0,Math.PI*2);
+  ctx.fillStyle=col; ctx.fill();
+}
+
+function renderCards(){
+  let rows=allResults.filter(r=>{
+    if(activeFilter==='bull') return r.signal==='bullish';
+    if(activeFilter==='bear') return r.signal==='bearish';
+    return true;
+  });
+  rows.sort((a,b)=>b.vol_ratio-a.vol_ratio);
+
+  document.getElementById('resCount').textContent=`${rows.length} signal${rows.length!==1?'s':''}`;
+  const container=document.getElementById('cardContainer');
+
+  if(!rows.length){
+    container.innerHTML=`<div class="empty"><div class="icon">📡</div>
+      <p>${allResults.length===0?'Run a scan to see signals.':'No signals match this filter.'}</p></div>`;
+    return;
+  }
+
+  container.innerHTML='';
+  rows.forEach(r=>{
+    const isBull=r.signal==='bullish';
+    const distStr=(r.dist_pct>=0?'+':'')+r.dist_pct.toFixed(2)+'%';
+    const timeStr=r.sig_time
+      ?new Date(r.sig_time).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})
+      :'—';
+
+    const card=document.createElement('div');
+    card.className=`signal-card ${isBull?'bull':'bear'}`;
+    card.innerHTML=`
+      <div class="card-top">
+        <span class="card-sym">${r.symbol}</span>
+        <span class="${isBull?'card-sig-bull':'card-sig-bear'}">${isBull?'▲ BULLISH':'▼ BEARISH'}</span>
+      </div>
+      <div class="card-row">
+        <div class="card-stat">
+          <span class="cs-label">LTP</span>
+          <span class="cs-value">₹${r.ltp.toFixed(2)}</span>
+        </div>
+        <div class="card-stat">
+          <span class="cs-label">P-KAMA</span>
+          <span class="cs-value" style="color:var(--muted)">₹${r.pkama.toFixed(2)}</span>
+        </div>
+        <div class="card-stat">
+          <span class="cs-label">% from KAMA</span>
+          <span class="cs-value ${r.dist_pct>=0?'cv-bull':'cv-bear'}">${distStr}</span>
+        </div>
+        <div class="card-stat">
+          <span class="cs-label">Vol Ratio</span>
+          <span class="cs-value ${r.vol_ratio>=2?'cv-bull':'cv-warn'}">${r.vol_ratio.toFixed(2)}x</span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <canvas id="sp_${r.symbol}" style="border-radius:4px"></canvas>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${timeStr}</span>
+      </div>
+    `;
+    container.appendChild(card);
+    const cvs=document.getElementById('sp_'+r.symbol);
+    if(cvs) drawSpark(cvs,r.spark_closes,r.spark_kama,r.signal);
+  });
+}
+
+function updateStats(scanned){
+  const bulls=allResults.filter(r=>r.signal==='bullish').length;
+  const bears=allResults.filter(r=>r.signal==='bearish').length;
+  if(scanned!=null) document.getElementById('sScanned').textContent=scanned;
+  document.getElementById('sSignals').textContent=allResults.length||'—';
+  document.getElementById('sBull').textContent=bulls||'—';
+  document.getElementById('sBear').textContent=bears||'—';
+}
+
+function startScan(){
+  allResults=[];
+  updateStats(0);
+  renderCards();
+  document.getElementById('logArea').innerHTML='';
+  document.getElementById('scanBtn').disabled=true;
+  document.getElementById('stopBtn').style.display='block';
+  document.getElementById('progWrap').style.display='block';
+  if(evtSource){evtSource.close();}
+
+  const params=new URLSearchParams({
+    length:       document.getElementById('kamaLen').value,
+    self_powered: document.getElementById('selfPowered').value,
+    factor:       document.getElementById('factor').value||3,
+    vol_mult:     document.getElementById('volMult').value
+  });
+
+  evtSource=new EventSource('/api/scan?'+params.toString());
+  evtSource.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    if(d.type==='log') log(d.msg,d.cls||'');
+    else if(d.type==='progress'){
+      document.getElementById('progFill').style.width=d.pct+'%';
+      updateStats(d.scanned);
+    }
+    else if(d.type==='signal'){allResults.push(d);updateStats(null);renderCards();}
+    else if(d.type==='done'){endScan(d.scanned);}
+    else if(d.type==='error'){log(d.msg,'err');endScan();}
+  };
+  evtSource.onerror=()=>{log('Connection lost.','err');endScan();};
+}
+
+function stopScan(){
+  if(evtSource){evtSource.close();evtSource=null;}
+  log('Stopped by user.','warn');
+  endScan();
+}
+
+function endScan(scanned){
+  if(scanned!=null) updateStats(scanned);
+  document.getElementById('scanBtn').disabled=false;
+  document.getElementById('stopBtn').style.display='none';
+  setTimeout(()=>{
+    document.getElementById('progWrap').style.display='none';
+    document.getElementById('progFill').style.width='0%';
+  },1200);
+}
+
+function setFilter(f){
+  activeFilter=f;
+  document.getElementById('fAll').className ='ftab'+(f==='all'?' fa':'');
+  document.getElementById('fBull').className='ftab'+(f==='bull'?' fb':'');
+  document.getElementById('fBear').className='ftab'+(f==='bear'?' fr':'');
+  renderCards();
+}
+
+document.getElementById('selfPowered').addEventListener('change',function(){
+  document.getElementById('factorGroup').style.display=this.value==='false'?'flex':'none';
+});
+
+// Poll token status every 5s (in case user logs in on another tab)
+setInterval(async()=>{
+  const r=await fetch('/api/token-status');
+  const d=await r.json();
+  const badge=document.getElementById('tokenBadge');
+  const banner=document.getElementById('loginBanner');
+  const okBanner=document.getElementById('tokenOkBanner');
+  const scanBtn=document.getElementById('scanBtn');
+  if(d.set){
+    badge.className='badge ok'; badge.textContent='✓ LOGGED IN';
+    banner.classList.add('hidden');
+    okBanner.classList.remove('hidden');
+    scanBtn.disabled=false;
+    scanBtn.textContent='▶ START SCAN';
+  } else {
+    badge.className='badge no'; badge.textContent='NOT LOGGED IN';
+    banner.classList.remove('hidden');
+    okBanner.classList.add('hidden');
+    scanBtn.disabled=true;
+    scanBtn.textContent='Login First to Scan';
+  }
+},5000);
+
+renderCards();
+</script>
+</body>
+</html>
