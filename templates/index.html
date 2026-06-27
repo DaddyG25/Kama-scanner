@@ -367,6 +367,10 @@ function startScan(){
     vol_mult:     document.getElementById('volMult').value
   });
 
+  // Track seen symbols to prevent duplicates
+  const seenSymbols = new Set();
+  let scanDone = false;
+
   evtSource=new EventSource('/api/scan?'+params.toString());
   evtSource.onmessage=e=>{
     const d=JSON.parse(e.data);
@@ -375,11 +379,38 @@ function startScan(){
       document.getElementById('progFill').style.width=d.pct+'%';
       updateStats(d.scanned);
     }
-    else if(d.type==='signal'){allResults.push(d);updateStats(null);renderCards();}
-    else if(d.type==='done'){endScan(d.scanned);}
-    else if(d.type==='error'){log(d.msg,'err');endScan();}
+    else if(d.type==='signal'){
+      // Skip if we already have this symbol (dedup)
+      const key = d.symbol + '_' + d.signal;
+      if(!seenSymbols.has(key)){
+        seenSymbols.add(key);
+        allResults.push(d);
+        updateStats(null);
+        renderCards();
+      }
+    }
+    else if(d.type==='done'){
+      scanDone=true;
+      evtSource.close();  // explicitly close — prevents browser auto-reconnect
+      evtSource=null;
+      endScan(d.scanned);
+    }
+    else if(d.type==='error'){
+      log(d.msg,'err');
+      scanDone=true;
+      evtSource.close();
+      evtSource=null;
+      endScan();
+    }
   };
-  evtSource.onerror=()=>{log('Connection lost.','err');endScan();};
+  // onerror fires when stream ends — only treat as error if scan wasn't done
+  evtSource.onerror=()=>{
+    if(!scanDone){
+      log('Connection lost.','err');
+      endScan();
+    }
+    if(evtSource){evtSource.close();evtSource=null;}
+  };
 }
 
 function stopScan(){
