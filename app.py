@@ -23,63 +23,64 @@ _state = {"access_token": None, "token_time": None}
 _nifty_cache = []
 
 def fetch_nifty500_symbols():
-    """Fetch the live official Nifty 500 constituent list from NSE."""
+    """
+    Fetch Nifty Total Market symbols from NSE CSV — most reliable method.
+    Falls back to Nifty 500 CSV if Total Market fails.
+    """
     global _nifty_cache
     if _nifty_cache:
         return _nifty_cache
+
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/",
+    }
+
+    # Warm up session with cookies first
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Referer": "https://www.nseindia.com/",
-        }
-        # Step 1: hit homepage to get cookies
-        session = requests.Session()
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        # Step 2: fetch index constituents
-        url  = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20TOTAL%20MARKET"
-        resp = session.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        symbols = [
-            item["symbol"] for item in data.get("data", [])
-            if item.get("symbol") and item["symbol"] != "NIFTY TOTAL MARKET"
-        ]
-        if len(symbols) > 100:   # sanity check — we expect ~500
-            _nifty_cache = symbols
-            print(f"✅ Fetched {len(symbols)} Nifty Total Market symbols from NSE")
-            return symbols
-        else:
-            raise ValueError(f"Too few symbols returned: {len(symbols)}")
-    except Exception as e:
-        print(f"⚠️  NSE fetch failed ({e}), using fallback list")
-        # Fallback hardcoded core list in case NSE blocks the request
-        return [
-            "RELIANCE","TCS","HDFCBANK","ICICIBANK","BHARTIARTL","INFOSYS","SBIN",
-            "HINDUNILVR","ITC","LT","KOTAKBANK","HCLTECH","BAJFINANCE","MARUTI",
-            "NTPC","ONGC","POWERGRID","ULTRACEMCO","NESTLEIND","AXISBANK","WIPRO",
-            "ADANIENT","JSWSTEEL","TATASTEEL","SUNPHARMA","TITAN","TECHM","ADANIPORTS",
-            "HDFCLIFE","BAJAJFINSV","COALINDIA","INDUSINDBK","GRASIM","DIVISLAB",
-            "CIPLA","EICHERMOT","DRREDDY","BAJAJ-AUTO","BPCL","TATACONSUM","HINDALCO",
-            "M&M","APOLLOHOSP","SBILIFE","BRITANNIA","HEROMOTOCO","ASIANPAINT","LTIM",
-            "SHRIRAMFIN","CHOLAFIN","SIEMENS","PIDILITIND","DMART","MUTHOOTFIN",
-            "GODREJCP","BOSCHLTD","ABB","HAVELLS","POLYCAB","MARICO","DABUR",
-            "BERGEPAINT","COLPAL","AMBUJACEM","LUPIN","BIOCON","TORNTPHARM","AUROPHARMA",
-            "ALKEM","ZYDUSLIFE","CONCOR","IRCTC","ADANIGREEN","ADANIPOWER","CANBK",
-            "PNB","BANKBARODA","UNIONBANK","FEDERALBNK","IDFCFIRSTB","BANDHANBNK",
-            "RBLBANK","AUBANK","LICHSGFIN","MANAPPURAM","RECLTD","PFC","IRFC",
-            "TATAPOWER","CESC","TORNTPOWER","IGL","MGL","GUJGASLTD","PETRONET",
-            "GAIL","IOC","HPCL","TATACHEM","COROMANDEL","PIIND","DEEPAKNTR",
-            "NAVINFLUOR","ATUL","VOLTAS","BLUESTARCO","CROMPTON","ZOMATO","NYKAA",
-            "DELHIVERY","KEC","BHEL","CUMMINSIND","THERMAX","ESCORTS","JKCEMENT",
-            "RAMCOCEM","TATAELXSI","PERSISTENT","MPHASIS","COFORGE","KPITTECH","LTTS",
-            "HAPPSTMNDS","TANLA","RAILTEL","INDIAMART","NAUKRI","CRISIL","ICICIGI",
-            "HDFCAMC","ANGELONE","BSE","CDSL","MCX","PVRINOX","SUZLON","DIXON",
-            "AMBER","HAL","BEL","BHEL","OFSS","PGHH","EMAMILTD","ZYDUSWELL",
-            "GRANULES","LALPATHLAB","METROPOLIS","MAXHEALTH","FORTIS","TRENT","ABFRL",
-            "VEDL","HINDZINC","NMDC","MOIL","RITES","IRCON","NBCC","NHPC","SJVN",
-            "LAURUSLABS","SYNGENE","PNBHOUSING","CANFINHOME","DIXON","KAYNES","SYRMA",
-        ]
+        time.sleep(1)
+    except Exception:
+        pass
+
+    # Try multiple sources in order of preference
+    sources = [
+        # 1. Nifty Total Market CSV
+        ("Nifty Total Market",
+         "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"),
+        # 2. Nifty 500 CSV (fallback)
+        ("Nifty 500",
+         "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"),
+    ]
+
+    for name, url in sources:
+        try:
+            resp = session.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            lines = resp.text.strip().split("\n")
+            symbols = []
+            for line in lines[1:]:   # skip header
+                cols = line.split(",")
+                if len(cols) >= 3:
+                    sym = cols[2].strip().strip('"')   # Symbol is 3rd column
+                    if sym and sym.isalpha() or (sym and "-" in sym):
+                        symbols.append(sym)
+            if len(symbols) > 100:
+                _nifty_cache = symbols
+                print(f"✅ Fetched {len(symbols)} symbols from {name} CSV")
+                return symbols
+            else:
+                print(f"⚠️ {name} CSV returned only {len(symbols)} symbols, trying next...")
+        except Exception as e:
+            print(f"⚠️ {name} CSV failed: {e}, trying next...")
+
+    # Final fallback — use Kite instruments filtered by EQ series (all liquid NSE stocks)
+    print("⚠️ All NSE CSV sources failed — using Kite instrument list directly")
+    return []   # empty = will be handled below in scan route
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def kite_headers():
@@ -231,12 +232,23 @@ def scan():
             return f"data: {json.dumps(obj)}\n\n"
 
         try:
-            yield send({"type":"log","msg":"Fetching live Nifty Total Market list from NSE…","cls":"info"})
+            yield send({"type":"log","msg":"Fetching Nifty Total Market list from NSE…","cls":"info"})
             symbols = fetch_nifty500_symbols()
-            yield send({"type":"log","msg":f"Got {len(symbols)} Nifty Total Market symbols.","cls":"ok"})
+
             yield send({"type":"log","msg":"Fetching Kite instrument tokens…","cls":"info"})
             inst_map = get_instruments()
             yield send({"type":"log","msg":f"Loaded {len(inst_map)} instruments.","cls":"ok"})
+
+            # If NSE CSV failed, build symbol list from Kite instruments (EQ series only)
+            if not symbols:
+                yield send({"type":"log","msg":"NSE fetch failed — using Kite EQ instrument list…","cls":"warn"})
+                symbols = [sym for sym, tok in inst_map.items()
+                           if not any(c.isdigit() for c in sym)
+                           and len(sym) <= 20]
+                yield send({"type":"log","msg":f"Using {len(symbols)} NSE EQ symbols from Kite.","cls":"warn"})
+            else:
+                yield send({"type":"log","msg":f"Got {len(symbols)} Nifty Total Market symbols.","cls":"ok"})
+
             yield send({"type":"connected"})
         except Exception as e:
             yield send({"type":"log","msg":f"✗ Failed: {e}","cls":"err"})
