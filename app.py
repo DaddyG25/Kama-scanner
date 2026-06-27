@@ -167,14 +167,30 @@ def check_volume(volumes, vol_mult=1.5):
 
 @app.route("/")
 def index():
-    # Login is handled by Drojun app — it pushes token to /receive_token
-    DROJUN_LOGIN = "https://drojun-webhook-production.up.railway.app/login"
+    kite      = KiteConnect(api_key=API_KEY)
+    login_url = kite.login_url()
     token_set = _state["access_token"] is not None
     time_str  = _state["token_time"].strftime("%d %b %Y, %I:%M %p") if _state["token_time"] else None
     return render_template("index.html",
-                           login_url=DROJUN_LOGIN,
+                           login_url=login_url,
                            token_set=token_set,
                            token_time=time_str)
+
+# ── Zerodha redirects here after login ────────────────────────────────────
+@app.route("/callback")
+def callback():
+    request_token = request.args.get("request_token")
+    if not request_token:
+        return "<h2 style='font-family:monospace;color:#ff4d6d'>❌ No request_token found. Please try logging in again.</h2>"
+    try:
+        kite = KiteConnect(api_key=API_KEY)
+        data = kite.generate_session(request_token, api_secret=API_SECRET)
+        _state["access_token"] = data["access_token"]
+        _state["token_time"]   = datetime.now()
+        print(f"✅ Token refreshed at {_state['token_time'].strftime('%I:%M %p')}")
+        return redirect("/")
+    except Exception as e:
+        return f"<h2 style='font-family:monospace;color:#ff4d6d'>❌ Login failed: {e}</h2>"
 
 @app.route("/api/token-status")
 def token_status():
