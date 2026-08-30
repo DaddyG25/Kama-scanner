@@ -145,7 +145,7 @@ header{display:flex;align-items:center;justify-content:space-between;
 
 <!-- Header -->
 <header>
-  <div class="logo">P-KAMA<span> / N750</span></div>
+  <div class="logo">P-KAMA<span> / NIFTY 50</span></div>
   <span class="badge {% if token_set %}ok{% else %}no{% endif %}" id="tokenBadge">
     {% if token_set %}✓ LOGGED IN{% else %}NOT LOGGED IN{% endif %}
   </span>
@@ -156,8 +156,8 @@ header{display:flex;align-items:center;justify-content:space-between;
   <div class="login-inner">
     <div class="login-title">🔐 Login Required</div>
     <div class="login-desc">
-      Tap the button below every morning to connect your Zerodha account.
-      Takes just 10 seconds — enter your PIN and you're done.
+      Connect Zerodha once each trading morning. Automatic 1H + daily scans
+      will then run during market hours and email newly confirmed signals.
     </div>
     <a class="btn-login" href="{{ login_url }}">
       ⚡ Login with Zerodha
@@ -231,7 +231,7 @@ header{display:flex;align-items:center;justify-content:space-between;
 <!-- Results -->
 <div class="results-wrap">
   <div class="results-hdr">
-    <span>1H · P-KAMA Cross + High Volume</span>
+    <span>1H CROSS + 1D CONFIRMATION + HIGH VOLUME</span>
     <span id="resCount">0 signals</span>
   </div>
   <div id="cardContainer">
@@ -327,7 +327,11 @@ function renderCards(){
         </div>
         <div class="card-stat">
           <span class="cs-label">Vol Ratio</span>
-          <span class="cs-value ${r.vol_ratio>=2?'cv-bull':'cv-warn'}">${r.vol_ratio.toFixed(2)}x</span>
+          <span class="cs-value ${r.vol_ratio_1h>=2?'cv-bull':'cv-warn'}">1H ${r.vol_ratio_1h.toFixed(2)}x</span>
+        </div>
+        <div class="card-stat">
+          <span class="cs-label">Daily Confirm</span>
+          <span class="cs-value cv-bull">₹${r.daily_close.toFixed(2)} / ${r.vol_ratio_1d.toFixed(2)}x</span>
         </div>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -381,7 +385,7 @@ function startScan(){
     }
     else if(d.type==='signal'){
       // Skip if we already have this symbol (dedup)
-      const key = d.symbol + '_' + d.signal;
+      const key = d.symbol + '_' + d.signal + '_' + d.sig_time_1h;
       if(!seenSymbols.has(key)){
         seenSymbols.add(key);
         allResults.push(d);
@@ -441,7 +445,7 @@ document.getElementById('selfPowered').addEventListener('change',function(){
   document.getElementById('factorGroup').style.display=this.value==='false'?'flex':'none';
 });
 
-// Poll token status every 5s (in case user logs in on another tab)
+// Poll token status and automatic-scan results.
 setInterval(async()=>{
   const r=await fetch('/api/token-status');
   const d=await r.json();
@@ -463,6 +467,20 @@ setInterval(async()=>{
     scanBtn.textContent='Login First to Scan';
   }
 },5000);
+
+async function pollAutomaticResults(){
+  try{
+    const r=await fetch('/api/latest-results');
+    const d=await r.json();
+    if(Array.isArray(d.results)){
+      allResults=d.results;
+      updateStats(allResults.length ? 50 : 0);
+      renderCards();
+    }
+  }catch(e){ /* the next poll will retry */ }
+}
+pollAutomaticResults();
+setInterval(pollAutomaticResults,30000);
 
 renderCards();
 </script>
