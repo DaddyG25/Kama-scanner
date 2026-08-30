@@ -6,7 +6,7 @@ This Railway app scans the current NIFTY 50 constituents using Zerodha Kite Conn
 
 - Latest completed 60-minute candle crosses from below to above P-KAMA.
 - 60-minute volume is at least `VOLUME_MULTIPLIER` times the previous 20-bar average.
-- Latest completed daily candle is above P-KAMA.
+- Latest completed daily candle crosses from below to above P-KAMA.
 - Daily volume is at least `VOLUME_MULTIPLIER` times the previous 20-day average.
 
 The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs every five minutes during NSE cash-market hours and emails only a new confirmed signal set.
