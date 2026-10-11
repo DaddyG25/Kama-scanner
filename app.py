@@ -46,7 +46,13 @@ REDIRECT_URI = os.environ.get(
 )
 IST = ZoneInfo("Asia/Kolkata")
 INDEX_LABEL = "NIFTY 500"
-CONSTITUENT_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+CONSTITUENT_URLS = (
+    os.getenv(
+        "NIFTY500_CONSTITUENT_URL",
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
+    ),
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+)
 VOLUME_LENGTH = 20
 
 _state = {
@@ -68,19 +74,36 @@ def fetch_nifty500_instruments() -> dict[str, str]:
     global _universe_cache
     if _universe_cache:
         return _universe_cache
-    response = requests.get(CONSTITUENT_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-    response.raise_for_status()
-    reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
-    instruments = {}
-    for row in reader:
-        symbol = (row.get("Symbol") or row.get("SYMBOL") or "").strip().upper()
-        isin = (row.get("ISIN Code") or row.get("ISIN") or "").strip().upper()
-        if symbol and isin:
-            instruments[symbol] = f"NSE_EQ|{isin}"
-    if len(instruments) < 450:
-        raise RuntimeError(f"NIFTY 500 constituent file returned only {len(instruments)} usable instruments")
-    _universe_cache = instruments
-    return instruments
+    errors = []
+    for constituent_url in dict.fromkeys(CONSTITUENT_URLS):
+        try:
+            host = "nseindia.com" if "nseindia.com" in constituent_url else "niftyindices.com"
+            response = requests.get(
+                constituent_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+                    "Accept": "text/csv,text/plain,application/octet-stream;q=0.9,*/*;q=0.8",
+                    "Referer": f"https://www.{host}/",
+                },
+                timeout=30,
+            )
+            if response.status_code != 200:
+                errors.append(f"{constituent_url} returned HTTP {response.status_code}")
+                continue
+            reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
+            instruments = {}
+            for row in reader:
+                symbol = (row.get("Symbol") or row.get("SYMBOL") or "").strip().upper()
+                isin = (row.get("ISIN Code") or row.get("ISIN") or "").strip().upper()
+                if symbol and isin:
+                    instruments[symbol] = f"NSE_EQ|{isin}"
+            if len(instruments) >= 450:
+                _universe_cache = instruments
+                return instruments
+            errors.append(f"{constituent_url} returned only {len(instruments)} usable instruments")
+        except requests.RequestException as exc:
+            errors.append(f"{constituent_url}: {exc}")
+    raise RuntimeError("Could not load the NIFTY 500 constituent list. " + " | ".join(errors))
 
 
 def upstox_headers() -> dict[str, str]:
