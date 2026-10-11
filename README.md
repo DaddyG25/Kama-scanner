@@ -9,7 +9,7 @@ This Railway app scans the current NIFTY 500 constituents using the Upstox API.
 - Latest completed daily candle crosses from below to above P-KAMA.
 - Daily volume is at least `VOLUME_MULTIPLIER` times the previous 20-day average.
 
-The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs once per completed hourly candle during NSE cash-market hours and emails only a new confirmed signal set. A NIFTY 500 scan is larger than NIFTY 50 and can take several minutes.
+The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs at `09:15`, `10:15`, `11:15`, `12:15`, `13:15`, `14:15`, and `15:15` IST during NSE cash-market hours and emails only a new confirmed signal set. A NIFTY 500 scan is larger than NIFTY 50 and can take several minutes.
 
 ## Railway variables
 
@@ -30,7 +30,7 @@ HOURLY_LOOKBACK_DAYS=60
 DAILY_LOOKBACK_DAYS=365
 UPSTOX_THROTTLE_SECONDS=0.35
 AUTO_SCAN_INTERVAL_MINUTES=60
-AUTO_SCAN_DELAY_MINUTES=5
+AUTO_SCAN_DELAY_MINUTES=0
 ```
 
 Register `https://YOUR-RAILWAY-DOMAIN/callback` as the Upstox app redirect URL. The standard Upstox access token expires at 3:30 AM the following day, so reconnect through the dashboard each trading morning. Do not commit API secrets.
