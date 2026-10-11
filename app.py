@@ -369,12 +369,14 @@ def scheduler_loop() -> None:
         now = datetime.now(IST)
         # A NIFTY 500 scan makes roughly 1,500 historical-data requests
         # (hourly history + intraday hourly history + daily history). Run it
-        # once per completed hourly candle by default instead of every 5
-        # minutes, which could exceed Upstox's rolling API limits.
+        # once per hourly slot by default instead of every 5 minutes, which
+        # could exceed Upstox's rolling API limits.
         interval_minutes = max(5, int(os.getenv("AUTO_SCAN_INTERVAL_MINUTES", "60")))
-        delay_minutes = max(0, int(os.getenv("AUTO_SCAN_DELAY_MINUTES", "5")))
+        delay_minutes = max(0, int(os.getenv("AUTO_SCAN_DELAY_MINUTES", "0")))
         market_minutes = (now.hour * 60 + now.minute) - (9 * 60 + 15)
-        first_slot = interval_minutes + delay_minutes
+        # With the default delay of zero, this triggers at 09:15, 10:15,
+        # 11:15, and so on through 15:15 IST.
+        first_slot = delay_minutes
         due = market_minutes >= first_slot and (market_minutes - first_slot) % interval_minutes < 5
         slot = (market_minutes - first_slot) // interval_minutes if due else None
         market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 40)
