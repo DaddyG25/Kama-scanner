@@ -30,7 +30,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, Response, jsonify, redirect, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request, send_file
 
 
 app = Flask(__name__)
@@ -61,6 +61,8 @@ _state = {
     "last_results": [],
     "last_scan_time": None,
     "last_scan_status": "Waiting for Upstox login",
+    "last_saved_at": None,
+    "last_saved_files": [],
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
@@ -327,6 +329,67 @@ def send_signal_email(results: list[dict]) -> None:
         smtp.send_message(message)
 
 
+RESULT_FIELDS = [
+    "symbol",
+    "signal",
+    "ltp",
+    "pkama_1h",
+    "vol_ratio_1h",
+    "daily_close",
+    "pkama_1d",
+    "vol_ratio_1d",
+    "sig_time_1h",
+    "daily_time",
+]
+
+
+def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict:
+    """Save each completed scan as timestamped JSON/CSV and update latest copies."""
+    directory = os.getenv("SCAN_DATA_DIR", "data")
+    os.makedirs(directory, exist_ok=True)
+    saved_at = datetime.now(IST)
+    stamp = saved_at.strftime("%Y%m%d_%H%M%S")
+    saved_at_text = saved_at.isoformat()
+
+    csv_output = io.StringIO()
+    writer = csv.DictWriter(csv_output, fieldnames=RESULT_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(results)
+    csv_text = csv_output.getvalue()
+    payload = {
+        "saved_at": saved_at_text,
+        "scan_type": scan_type,
+        "index": INDEX_LABEL,
+        "scanned_symbols": len(fetch_nifty500_instruments()),
+        "parameters": params,
+        "results": results,
+    }
+    json_text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+    def write_atomically(path: str, content: str) -> None:
+        temp_path = f"{path}.tmp"
+        with open(temp_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        os.replace(temp_path, path)
+
+    json_path = os.path.join(directory, f"scan_{stamp}.json")
+    csv_path = os.path.join(directory, f"scan_{stamp}.csv")
+    latest_json_path = os.path.join(directory, "latest_results.json")
+    latest_csv_path = os.path.join(directory, "latest_results.csv")
+    for path, content in (
+        (json_path, json_text),
+        (csv_path, csv_text),
+        (latest_json_path, json_text),
+        (latest_csv_path, csv_text),
+    ):
+        write_atomically(path, content)
+
+    _state["last_saved_at"] = saved_at_text
+    _state["last_saved_files"] = [json_path, csv_path, latest_json_path, latest_csv_path]
+    logging.info("Saved scan results to %s", json_path)
+    return {"saved_at": saved_at_text, "json": json_path, "csv": csv_path}
+
+
 def fingerprint(results: list[dict]) -> str:
     value = json.dumps(
         [(x["symbol"], x["sig_time_1h"], x["daily_time"]) for x in results], sort_keys=True
@@ -338,13 +401,19 @@ def run_automatic_scan() -> None:
     if not _state["access_token"] or not _scan_lock.acquire(blocking=False):
         return
     try:
-        params = (
-            int(os.getenv("PKAMA_LENGTH", "50")),
-            os.getenv("PKAMA_SELF_POWERED", "true").lower() == "true",
-            float(os.getenv("PKAMA_FACTOR", "3")),
-            float(os.getenv("VOLUME_MULTIPLIER", "1.5")),
+        scan_params = {
+            "length": int(os.getenv("PKAMA_LENGTH", "50")),
+            "self_powered": os.getenv("PKAMA_SELF_POWERED", "true").lower() == "true",
+            "factor": float(os.getenv("PKAMA_FACTOR", "3")),
+            "vol_mult": float(os.getenv("VOLUME_MULTIPLIER", "1.5")),
+        }
+        results = scan_market(
+            scan_params["length"],
+            scan_params["self_powered"],
+            scan_params["factor"],
+            scan_params["vol_mult"],
         )
-        results = scan_market(*params)
+        save_scan_results(results, "automatic", scan_params)
         _state["last_results"] = results
         _state["last_scan_time"] = datetime.now(IST).isoformat()
         _state["last_scan_status"] = f"Automatic scan complete: {len(results)} confirmed signal(s)"
@@ -372,11 +441,12 @@ def scheduler_loop() -> None:
         # once per hourly slot by default instead of every 5 minutes, which
         # could exceed Upstox's rolling API limits.
         interval_minutes = max(5, int(os.getenv("AUTO_SCAN_INTERVAL_MINUTES", "60")))
-        delay_minutes = max(0, int(os.getenv("AUTO_SCAN_DELAY_MINUTES", "0")))
+        delay_minutes = max(1, int(os.getenv("AUTO_SCAN_DELAY_MINUTES", "1")))
         market_minutes = (now.hour * 60 + now.minute) - (9 * 60 + 15)
-        # With the default delay of zero, this triggers at 09:15, 10:15,
-        # 11:15, and so on through 15:15 IST.
-        first_slot = delay_minutes
+        # With the default one-minute delay, this triggers at 10:16, 11:16,
+        # 12:16, 13:16, 14:16, and 15:16 IST. The 09:15 opening candle is
+        # deliberately excluded because it is not a completed trading hour.
+        first_slot = interval_minutes + delay_minutes
         due = market_minutes >= first_slot and (market_minutes - first_slot) % interval_minutes < 5
         slot = (market_minutes - first_slot) // interval_minutes if due else None
         market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 40)
@@ -465,6 +535,7 @@ def token_status():
             "time": _state["token_time"].strftime("%d %b, %I:%M %p") if _state["token_time"] else None,
             "status": _state["last_scan_status"],
             "last_scan_time": _state["last_scan_time"],
+            "saved_at": _state["last_saved_at"],
             "signals": len(_state["last_results"]),
         }
     )
@@ -472,7 +543,21 @@ def token_status():
 
 @app.route("/api/latest-results")
 def latest_results():
-    return jsonify({"results": _state["last_results"], "status": _state["last_scan_status"]})
+    return jsonify(
+        {
+            "results": _state["last_results"],
+            "status": _state["last_scan_status"],
+            "saved_at": _state["last_saved_at"],
+        }
+    )
+
+
+@app.route("/api/download/latest.csv")
+def download_latest_results():
+    path = os.path.join(os.getenv("SCAN_DATA_DIR", "data"), "latest_results.csv")
+    if not os.path.exists(path):
+        return jsonify({"error": "No scan has been saved yet."}), 404
+    return send_file(path, mimetype="text/csv", as_attachment=True, download_name="pkama_latest_results.csv")
 
 
 @app.route("/api/scan")
@@ -501,6 +586,16 @@ def manual_scan():
     def worker():
         try:
             results = scan_market(length, self_powered, factor, vol_mult, emit=emit)
+            save_scan_results(
+                results,
+                "manual",
+                {
+                    "length": length,
+                    "self_powered": self_powered,
+                    "factor": factor,
+                    "vol_mult": vol_mult,
+                },
+            )
             _state["last_results"] = results
             _state["last_scan_time"] = datetime.now(IST).isoformat()
             _state["last_scan_status"] = f"Manual scan complete: {len(results)} confirmed signal(s)"
