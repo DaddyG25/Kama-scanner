@@ -1,4 +1,4 @@
-"""NIFTY 50 P-KAMA scanner for Railway and the Upstox API.
+"""NIFTY 500 P-KAMA scanner for Railway and the Upstox API.
 
 The confirmed bullish condition is:
   * the latest completed 60-minute candle crosses from below to above P-KAMA;
@@ -45,7 +45,8 @@ REDIRECT_URI = os.environ.get(
     f"https://{PUBLIC_DOMAIN}/callback" if PUBLIC_DOMAIN else "http://localhost:5000/callback",
 )
 IST = ZoneInfo("Asia/Kolkata")
-CONSTITUENT_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
+INDEX_LABEL = "NIFTY 500"
+CONSTITUENT_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
 VOLUME_LENGTH = 20
 
 _state = {
@@ -57,16 +58,16 @@ _state = {
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
-_nifty_cache: dict[str, str] = {}
+_universe_cache: dict[str, str] = {}
 _scan_lock = threading.Lock()
 _scheduler_started = False
 
 
-def fetch_nifty50_instruments() -> dict[str, str]:
-    """Fetch NIFTY 50 symbols and construct Upstox NSE instrument keys from ISINs."""
-    global _nifty_cache
-    if _nifty_cache:
-        return _nifty_cache
+def fetch_nifty500_instruments() -> dict[str, str]:
+    """Fetch the current NIFTY 500 and construct Upstox NSE keys from ISINs."""
+    global _universe_cache
+    if _universe_cache:
+        return _universe_cache
     response = requests.get(CONSTITUENT_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
     response.raise_for_status()
     reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
@@ -76,9 +77,9 @@ def fetch_nifty50_instruments() -> dict[str, str]:
         isin = (row.get("ISIN Code") or row.get("ISIN") or "").strip().upper()
         if symbol and isin:
             instruments[symbol] = f"NSE_EQ|{isin}"
-    if len(instruments) < 40:
-        raise RuntimeError(f"NIFTY 50 constituent file returned only {len(instruments)} usable instruments")
-    _nifty_cache = instruments
+    if len(instruments) < 450:
+        raise RuntimeError(f"NIFTY 500 constituent file returned only {len(instruments)} usable instruments")
+    _universe_cache = instruments
     return instruments
 
 
@@ -242,7 +243,7 @@ def evaluate_signal(
 
 
 def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float, emit=None) -> list[dict]:
-    instruments = fetch_nifty50_instruments()
+    instruments = fetch_nifty500_instruments()
     symbols = list(instruments)
     results = []
     total = len(symbols)
@@ -292,7 +293,7 @@ def send_signal_email(results: list[dict]) -> None:
         )
     csv_text = "\n".join(lines) + "\n"
     message = EmailMessage()
-    message["Subject"] = f"Confirmed P-KAMA signal: {len(results)} NIFTY 50 stock(s)"
+    message["Subject"] = f"Confirmed P-KAMA signal: {len(results)} {INDEX_LABEL} stock(s)"
     message["From"] = sender
     message["To"] = ", ".join(recipients)
     message.set_content("The attached CSV contains stocks confirmed by both 1H and daily P-KAMA conditions. No orders were placed.")
@@ -343,9 +344,18 @@ def scheduler_loop() -> None:
     last_slot = None
     while True:
         now = datetime.now(IST)
-        slot = now.replace(second=0, microsecond=0, minute=(now.minute // 5) * 5)
+        # A NIFTY 500 scan makes roughly 1,500 historical-data requests
+        # (hourly history + intraday hourly history + daily history). Run it
+        # once per completed hourly candle by default instead of every 5
+        # minutes, which could exceed Upstox's rolling API limits.
+        interval_minutes = max(5, int(os.getenv("AUTO_SCAN_INTERVAL_MINUTES", "60")))
+        delay_minutes = max(0, int(os.getenv("AUTO_SCAN_DELAY_MINUTES", "5")))
+        market_minutes = (now.hour * 60 + now.minute) - (9 * 60 + 15)
+        first_slot = interval_minutes + delay_minutes
+        due = market_minutes >= first_slot and (market_minutes - first_slot) % interval_minutes < 5
+        slot = (market_minutes - first_slot) // interval_minutes if due else None
         market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 40)
-        if market_open and slot != last_slot:
+        if market_open and due and slot != last_slot:
             last_slot = slot
             threading.Thread(target=run_automatic_scan, daemon=True).start()
         time.sleep(20)
@@ -470,7 +480,7 @@ def manual_scan():
             _state["last_scan_time"] = datetime.now(IST).isoformat()
             _state["last_scan_status"] = f"Manual scan complete: {len(results)} confirmed signal(s)"
             notify_if_new(results)
-            events.put({"type": "done", "scanned": 50})
+            events.put({"type": "done", "scanned": len(fetch_nifty500_instruments())})
         except Exception as exc:
             _state["last_scan_status"] = f"Scan error: {exc}"
             events.put({"type": "error", "msg": str(exc)})
@@ -481,7 +491,7 @@ def manual_scan():
     threading.Thread(target=worker, daemon=True).start()
 
     def generate():
-        yield f"data: {json.dumps({'type': 'log', 'msg': 'Scanning NIFTY 50 on 1H + daily confirmation…', 'cls': 'info'})}\n\n"
+        yield f"data: {json.dumps({'type': 'log', 'msg': f'Scanning {INDEX_LABEL} on 1H + daily confirmation…', 'cls': 'info'})}\n\n"
         while True:
             event = events.get()
             if event is None:
@@ -496,3 +506,4 @@ start_scheduler()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False, threaded=True)
+
