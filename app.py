@@ -1,4 +1,4 @@
-"""NIFTY 50 P-KAMA scanner for Railway and Zerodha Kite Connect.
+"""NIFTY 50 P-KAMA scanner for Railway and the Upstox API.
 
 The confirmed bullish condition is:
   * the latest completed 60-minute candle crosses from below to above P-KAMA;
@@ -31,14 +31,19 @@ from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, Response, jsonify, redirect, render_template, request
-from kiteconnect import KiteConnect
 
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-API_KEY = os.environ.get("KITE_API_KEY", "")
-API_SECRET = os.environ.get("KITE_API_SECRET", "")
+UPSTOX_API_BASE = "https://api.upstox.com"
+API_KEY = os.environ.get("UPSTOX_API_KEY", "")
+API_SECRET = os.environ.get("UPSTOX_API_SECRET", "")
+PUBLIC_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+REDIRECT_URI = os.environ.get(
+    "UPSTOX_REDIRECT_URI",
+    f"https://{PUBLIC_DOMAIN}/callback" if PUBLIC_DOMAIN else "http://localhost:5000/callback",
+)
 IST = ZoneInfo("Asia/Kolkata")
 CONSTITUENT_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
 VOLUME_LENGTH = 20
@@ -48,59 +53,91 @@ _state = {
     "token_time": None,
     "last_results": [],
     "last_scan_time": None,
-    "last_scan_status": "Waiting for Zerodha login",
+    "last_scan_status": "Waiting for Upstox login",
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
-_nifty_cache: list[str] = []
+_nifty_cache: dict[str, str] = {}
 _scan_lock = threading.Lock()
 _scheduler_started = False
 
 
-def fetch_nifty50_symbols() -> list[str]:
-    """Fetch the current NIFTY 50 constituents from Nifty Indices."""
+def fetch_nifty50_instruments() -> dict[str, str]:
+    """Fetch NIFTY 50 symbols and construct Upstox NSE instrument keys from ISINs."""
     global _nifty_cache
     if _nifty_cache:
         return _nifty_cache
     response = requests.get(CONSTITUENT_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
     response.raise_for_status()
     reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
-    symbols = []
+    instruments = {}
     for row in reader:
         symbol = (row.get("Symbol") or row.get("SYMBOL") or "").strip().upper()
-        if symbol:
-            symbols.append(symbol)
-    if len(symbols) < 40:
-        raise RuntimeError(f"NIFTY 50 constituent file returned only {len(symbols)} symbols")
-    _nifty_cache = symbols
-    return symbols
+        isin = (row.get("ISIN Code") or row.get("ISIN") or "").strip().upper()
+        if symbol and isin:
+            instruments[symbol] = f"NSE_EQ|{isin}"
+    if len(instruments) < 40:
+        raise RuntimeError(f"NIFTY 50 constituent file returned only {len(instruments)} usable instruments")
+    _nifty_cache = instruments
+    return instruments
 
 
-def kite_client() -> KiteConnect:
+def upstox_headers() -> dict[str, str]:
     if not API_KEY:
-        raise RuntimeError("KITE_API_KEY is not configured")
+        raise RuntimeError("UPSTOX_API_KEY is not configured")
     if not _state["access_token"]:
-        raise RuntimeError("Zerodha login required")
-    kite = KiteConnect(api_key=API_KEY)
-    kite.set_access_token(_state["access_token"])
-    return kite
-
-
-def get_instruments(kite: KiteConnect, symbols: list[str]) -> dict[str, int]:
-    records = kite.instruments("NSE")
-    wanted = set(symbols)
+        raise RuntimeError("Upstox login required")
     return {
-        str(row["tradingsymbol"]).upper(): int(row["instrument_token"])
-        for row in records
-        if str(row.get("instrument_type", "")).upper() == "EQ"
-        and str(row.get("tradingsymbol", "")).upper() in wanted
+        "Accept": "application/json",
+        "Authorization": f"Bearer {_state['access_token']}",
     }
 
 
-def get_historical(kite: KiteConnect, token: int, interval: str, days: int) -> list[dict]:
+def upstox_json(url: str, **kwargs) -> dict:
+    response = requests.get(url, headers=upstox_headers(), timeout=30, **kwargs)
+    if response.status_code != 200:
+        raise RuntimeError(f"Upstox HTTP {response.status_code}: {response.text[:300]}")
+    payload = response.json()
+    if payload.get("status") != "success":
+        raise RuntimeError(f"Upstox request failed: {payload}")
+    return payload.get("data") or {}
+
+
+def parse_upstox_candles(data: dict) -> list[dict]:
+    parsed = []
+    for row in data.get("candles", []):
+        if len(row) < 6:
+            continue
+        stamp = str(row[0]).replace("Z", "+00:00")
+        parsed.append(
+            {
+                "date": datetime.fromisoformat(stamp),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+            }
+        )
+    return parsed
+
+
+def get_upstox_candles(instrument_key: str, unit: str, interval: str, days: int) -> list[dict]:
     now = datetime.now(IST)
-    start = now - timedelta(days=days)
-    return kite.historical_data(token, start, now, interval, continuous=False, oi=False)
+    from_date = (now - timedelta(days=days)).date().isoformat()
+    to_date = now.date().isoformat()
+    encoded_key = quote(instrument_key, safe="")
+    url = f"{UPSTOX_API_BASE}/v3/historical-candle/{encoded_key}/{unit}/{interval}/{to_date}/{from_date}"
+    candles = parse_upstox_candles(upstox_json(url))
+
+    # Historical data can omit today's still-forming session. Merge the current
+    # intraday feed so the latest completed 1-hour candle is available.
+    if unit == "hours":
+        intraday_url = f"{UPSTOX_API_BASE}/v3/historical-candle/intraday/{encoded_key}/{unit}/{interval}"
+        candles.extend(parse_upstox_candles(upstox_json(intraday_url)))
+
+    unique = {c["date"].isoformat(): c for c in candles}
+    return [unique[key] for key in sorted(unique)]
 
 
 def is_complete_candle(candle_date, interval: str, now: datetime) -> bool:
@@ -205,20 +242,23 @@ def evaluate_signal(
 
 
 def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float, emit=None) -> list[dict]:
-    kite = kite_client()
-    symbols = fetch_nifty50_symbols()
-    instruments = get_instruments(kite, symbols)
+    instruments = fetch_nifty50_instruments()
+    symbols = list(instruments)
     results = []
     total = len(symbols)
     for index, symbol in enumerate(symbols, 1):
         if emit:
             emit({"type": "progress", "pct": round(index / total * 100), "scanned": index})
-        token = instruments.get(symbol)
-        if not token:
+        instrument_key = instruments.get(symbol)
+        if not instrument_key:
             continue
         try:
-            hourly = get_historical(kite, token, "60minute", int(os.getenv("HOURLY_LOOKBACK_DAYS", "60")))
-            daily = get_historical(kite, token, "day", int(os.getenv("DAILY_LOOKBACK_DAYS", "365")))
+            hourly = get_upstox_candles(
+                instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "60"))
+            )
+            daily = get_upstox_candles(
+                instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "365"))
+            )
             signal = evaluate_signal(hourly, daily, length, self_powered, factor, vol_mult)
             if signal:
                 signal["symbol"] = symbol
@@ -229,7 +269,7 @@ def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float,
             logging.warning("%s scan failed: %s", symbol, exc)
             if emit:
                 emit({"type": "log", "msg": f"{symbol}: {exc}", "cls": "err"})
-        time.sleep(float(os.getenv("KITE_THROTTLE_SECONDS", "0.35")))
+        time.sleep(float(os.getenv("UPSTOX_THROTTLE_SECONDS", "0.35")))
     return results
 
 
@@ -327,8 +367,9 @@ def index():
         state = secrets.token_urlsafe(32)
         _state["oauth_state"] = state
         login_url = (
-            "https://kite.zerodha.com/connect/login?"
-            f"api_key={quote(API_KEY)}&v=3&redirect_params={quote('state=' + state)}"
+            "https://api.upstox.com/v2/login/authorization/dialog?"
+            f"client_id={quote(API_KEY)}&redirect_uri={quote(REDIRECT_URI)}"
+            f"&response_type=code&state={quote(state)}"
         )
     token_set = _state["access_token"] is not None
     time_str = _state["token_time"].strftime("%d %b %Y, %I:%M %p") if _state["token_time"] else None
@@ -345,23 +386,40 @@ def index():
 
 @app.route("/callback")
 def callback():
-    request_token = request.args.get("request_token")
+    authorization_code = request.args.get("code")
     returned_state = request.args.get("state")
-    if not request_token:
-        return render_template("callback_error.html", msg="No request_token found. Please try again."), 400
+    if not authorization_code:
+        return render_template("callback_error.html", msg="No Upstox authorization code found. Please try again."), 400
     if not _state["oauth_state"] or not returned_state or not hmac.compare_digest(_state["oauth_state"], returned_state):
         return render_template("callback_error.html", msg="Invalid login state. Please start login again."), 400
     _state["oauth_state"] = None
     try:
-        kite = KiteConnect(api_key=API_KEY)
-        data = kite.generate_session(request_token, api_secret=API_SECRET)
+        if not API_KEY or not API_SECRET:
+            raise RuntimeError("UPSTOX_API_KEY or UPSTOX_API_SECRET is not configured")
+        response = requests.post(
+            f"{UPSTOX_API_BASE}/v2/login/authorization/token",
+            headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "code": authorization_code,
+                "client_id": API_KEY,
+                "client_secret": API_SECRET,
+                "redirect_uri": REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Upstox token exchange failed ({response.status_code}): {response.text[:300]}")
+        data = response.json()
+        if not data.get("access_token"):
+            raise RuntimeError(f"Upstox token exchange returned no access token: {data}")
         _state["access_token"] = data["access_token"]
         _state["token_time"] = datetime.now(IST)
-        _state["last_scan_status"] = "Zerodha connected; automatic scanning is active"
+        _state["last_scan_status"] = "Upstox connected; automatic scanning is active"
         return redirect("/")
     except Exception as exc:
-        logging.exception("Zerodha login failed")
-        return render_template("callback_error.html", msg=f"Zerodha login failed: {exc}"), 502
+        logging.exception("Upstox login failed")
+        return render_template("callback_error.html", msg=f"Upstox login failed: {exc}"), 502
 
 
 @app.route("/api/token-status")
@@ -386,7 +444,7 @@ def latest_results():
 def manual_scan():
     if not _state["access_token"]:
         return Response(
-            f"data: {json.dumps({'type': 'error', 'msg': 'Please connect Zerodha first.'})}\n\n",
+            f"data: {json.dumps({'type': 'error', 'msg': 'Please connect Upstox first.'})}\n\n",
             mimetype="text/event-stream",
         )
     if not _scan_lock.acquire(blocking=False):

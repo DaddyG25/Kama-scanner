@@ -156,18 +156,18 @@ header{display:flex;align-items:center;justify-content:space-between;
   <div class="login-inner">
     <div class="login-title">🔐 Login Required</div>
     <div class="login-desc">
-      Connect Zerodha once each trading morning. Automatic 1H + daily scans
+      Connect Upstox once each trading morning. Automatic 1H + daily scans
       will then run during market hours and email newly confirmed signals.
     </div>
     <a class="btn-login" href="{{ login_url }}">
-      ⚡ Login with Zerodha
+      ⚡ Login with Upstox
     </a>
   </div>
 </div>
 
 <!-- Token OK Banner -->
 <div class="token-ok-banner {% if not token_set %}hidden{% endif %}" id="tokenOkBanner">
-  ✅ Zerodha connected
+  ✅ Upstox connected
   {% if token_time %}<span style="color:var(--muted);margin-left:8px">{{ token_time }}</span>{% endif %}
   &nbsp;·&nbsp;<a href="{{ login_url }}" style="color:var(--accent2);text-decoration:none;font-size:11px">Refresh</a>
 </div>
@@ -217,7 +217,7 @@ header{display:flex;align-items:center;justify-content:space-between;
 <!-- Log -->
 <div class="log-wrap">
   <div class="log-area" id="logArea">
-    <div class="ll ll-info">P-KAMA Scanner ready.{% if not token_set %} Please login with Zerodha first.{% endif %}</div>
+    <div class="ll ll-info">P-KAMA Scanner ready.{% if not token_set %} Please login with Upstox first.{% endif %}</div>
   </div>
 </div>
 
