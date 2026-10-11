@@ -232,7 +232,7 @@ header{display:flex;align-items:center;justify-content:space-between;
 <div class="results-wrap">
   <div class="results-hdr">
     <span>1H CROSS + 1D CONFIRMATION + HIGH VOLUME</span>
-    <span id="resCount">0 signals</span>
+    <span><a href="/api/download/latest.csv" id="downloadLink">DOWNLOAD SAVED CSV</a> &nbsp; <span id="resCount">0 signals</span></span>
   </div>
   <div id="cardContainer">
     <div class="empty"><div class="icon">📡</div><p>Run a scan to see signals</p></div>
@@ -243,6 +243,7 @@ header{display:flex;align-items:center;justify-content:space-between;
 let allResults   = [];
 let evtSource    = null;
 let activeFilter = 'all';
+let lastSavedAt   = null;
 
 function log(msg, cls=''){
   const area = document.getElementById('logArea');
@@ -476,6 +477,10 @@ async function pollAutomaticResults(){
       allResults=d.results;
       updateStats(allResults.length ? 50 : 0);
       renderCards();
+    }
+    if(d.saved_at && d.saved_at !== lastSavedAt){
+      lastSavedAt=d.saved_at;
+      log(`Autosaved scan: ${d.saved_at}`,'ok');
     }
   }catch(e){ /* the next poll will retry */ }
 }
