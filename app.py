@@ -12,6 +12,7 @@ The service is a scanner/alert system only. It never places orders.
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import hmac
 import io
@@ -52,6 +53,10 @@ CONSTITUENT_URLS = (
         "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
     ),
     "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+)
+UPSTOX_NSE_INSTRUMENTS_URL = os.getenv(
+    "UPSTOX_NSE_INSTRUMENTS_URL",
+    "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
 )
 VOLUME_LENGTH = 20
 
@@ -141,8 +146,42 @@ def scan_progress_snapshot() -> dict:
         }
 
 
+def fetch_upstox_nse_instrument_maps() -> tuple[dict[str, str], dict[str, str]]:
+    """Load valid NSE equity keys from Upstox's daily BOD JSON master."""
+    response = requests.get(
+        UPSTOX_NSE_INSTRUMENTS_URL,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json,application/gzip"},
+        timeout=90,
+    )
+    response.raise_for_status()
+    raw = response.content
+    if raw.startswith(b"\x1f\x8b"):
+        raw = gzip.decompress(raw)
+    payload = json.loads(raw.decode("utf-8"))
+    if isinstance(payload, dict):
+        payload = payload.get("data", [])
+
+    by_isin: dict[str, str] = {}
+    by_symbol: dict[str, str] = {}
+    for item in payload:
+        if item.get("segment") != "NSE_EQ" or item.get("instrument_type") != "EQ":
+            continue
+        key = str(item.get("instrument_key") or "").strip()
+        isin = str(item.get("isin") or "").strip().upper()
+        symbol = str(item.get("trading_symbol") or "").strip().upper()
+        if not key.startswith("NSE_EQ|") or key.split("|", 1)[1].upper().startswith("DUMMY"):
+            continue
+        if isin:
+            by_isin[isin] = key
+        if symbol:
+            by_symbol[symbol] = key
+    if len(by_isin) < 1000:
+        raise RuntimeError(f"Upstox NSE instrument master returned only {len(by_isin)} equity instruments")
+    return by_isin, by_symbol
+
+
 def fetch_nifty500_instruments() -> dict[str, str]:
-    """Fetch the current NIFTY 500 and construct Upstox NSE keys from ISINs."""
+    """Match current NIFTY 500 members to valid Upstox NSE instrument keys."""
     global _universe_cache
     if _universe_cache:
         return _universe_cache
@@ -163,16 +202,49 @@ def fetch_nifty500_instruments() -> dict[str, str]:
                 errors.append(f"{constituent_url} returned HTTP {response.status_code}")
                 continue
             reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
-            instruments = {}
+            constituents = []
             for row in reader:
                 symbol = (row.get("Symbol") or row.get("SYMBOL") or "").strip().upper()
                 isin = (row.get("ISIN Code") or row.get("ISIN") or "").strip().upper()
                 if symbol and isin:
-                    instruments[symbol] = f"NSE_EQ|{isin}"
-            if len(instruments) >= 450:
+                    constituents.append((symbol, isin))
+            if len(constituents) >= 450:
+                try:
+                    by_isin, by_symbol = fetch_upstox_nse_instrument_maps()
+                    instruments = {}
+                    skipped = []
+                    for symbol, isin in constituents:
+                        key = by_isin.get(isin) or by_symbol.get(symbol)
+                        if key:
+                            instruments[symbol] = key
+                        else:
+                            skipped.append(symbol)
+                    if len(instruments) < 450:
+                        raise RuntimeError(
+                            f"Only {len(instruments)} NIFTY 500 members matched the Upstox instrument master"
+                        )
+                    if skipped:
+                        preview = ", ".join(skipped[:8])
+                        record_activity(
+                            f"Loaded {len(instruments)} valid Upstox instruments; "
+                            f"skipped {len(skipped)} unavailable NSE entr{'y' if len(skipped) == 1 else 'ies'}: {preview}.",
+                            "warn",
+                        )
+                except (requests.RequestException, OSError, ValueError, RuntimeError) as exc:
+                    # Safe fallback: genuine Indian equity ISINs only. This
+                    # rejects NSE placeholder keys such as DUMMYMHEG.
+                    instruments = {
+                        symbol: f"NSE_EQ|{isin}"
+                        for symbol, isin in constituents
+                        if len(isin) == 12 and isin.startswith("INE")
+                    }
+                    record_activity(
+                        f"Upstox instrument master unavailable; using {len(instruments)} validated ISIN keys: {exc}",
+                        "warn",
+                    )
                 _universe_cache = instruments
                 return instruments
-            errors.append(f"{constituent_url} returned only {len(instruments)} usable instruments")
+            errors.append(f"{constituent_url} returned only {len(constituents)} usable instruments")
         except requests.RequestException as exc:
             errors.append(f"{constituent_url}: {exc}")
     raise RuntimeError("Could not load the NIFTY 500 constituent list. " + " | ".join(errors))
@@ -362,9 +434,14 @@ def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float,
                 if emit:
                     emit({"type": "signal", **signal})
         except Exception as exc:  # Continue scanning if one instrument fails.
-            logging.warning("%s scan failed: %s", symbol, exc)
+            message = str(exc)
+            invalid_key = "UDAPI100011" in message or "Invalid Instrument key" in message
+            logging.warning("%s scan failed: %s", symbol, message)
             if emit:
-                emit({"type": "log", "msg": f"{symbol}: {exc}", "cls": "err"})
+                if invalid_key:
+                    emit({"type": "log", "msg": f"{symbol}: skipped because Upstox has no valid instrument key.", "cls": "warn"})
+                else:
+                    emit({"type": "log", "msg": f"{symbol}: {message}", "cls": "err"})
         time.sleep(float(os.getenv("UPSTOX_THROTTLE_SECONDS", "0.35")))
     return results
 
