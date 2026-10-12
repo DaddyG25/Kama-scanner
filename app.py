@@ -476,6 +476,8 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
         record_activity(f"Automatic scan {slot_label} skipped: another scan is still running.", "warn")
         return
     begin_scan_progress("automatic", slot_label)
+    _state["last_results"] = []
+    _state["last_scanned_count"] = 0
     record_activity(f"Automatic scan {slot_label} started for {INDEX_LABEL}.")
     try:
         scan_params = {
@@ -486,6 +488,10 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
         }
         def track_progress(event: dict) -> None:
             update_scan_progress(event)
+            if event.get("type") == "signal":
+                _state["last_results"].append(
+                    {key: value for key, value in event.items() if key != "type"}
+                )
 
         results = scan_market(
             scan_params["length"],
