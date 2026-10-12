@@ -66,12 +66,19 @@ _state = {
     "last_saved_files": [],
     "activity_log": [],
     "activity_seq": 0,
+    "scan_running": False,
+    "scan_mode": None,
+    "scan_slot": None,
+    "scan_progress_scanned": 0,
+    "scan_progress_total": 0,
+    "scan_progress_pct": 0,
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
 _universe_cache: dict[str, str] = {}
 _scan_lock = threading.Lock()
 _activity_lock = threading.Lock()
+_progress_lock = threading.Lock()
 _scheduler_started = False
 
 
@@ -96,6 +103,42 @@ def record_activity(message: str, cls: str = "info") -> None:
         logging.warning(message)
     else:
         logging.info(message)
+
+
+def begin_scan_progress(mode: str, slot: str | None = None) -> None:
+    with _progress_lock:
+        _state["scan_running"] = True
+        _state["scan_mode"] = mode
+        _state["scan_slot"] = slot
+        _state["scan_progress_scanned"] = 0
+        _state["scan_progress_total"] = 0
+        _state["scan_progress_pct"] = 0
+
+
+def update_scan_progress(event: dict) -> None:
+    if event.get("type") != "progress":
+        return
+    with _progress_lock:
+        _state["scan_progress_scanned"] = int(event.get("scanned", 0))
+        _state["scan_progress_total"] = int(event.get("total", 0))
+        _state["scan_progress_pct"] = int(event.get("pct", 0))
+
+
+def finish_scan_progress() -> None:
+    with _progress_lock:
+        _state["scan_running"] = False
+
+
+def scan_progress_snapshot() -> dict:
+    with _progress_lock:
+        return {
+            "running": _state["scan_running"],
+            "mode": _state["scan_mode"],
+            "slot": _state["scan_slot"],
+            "scanned": _state["scan_progress_scanned"],
+            "total": _state["scan_progress_total"],
+            "pct": _state["scan_progress_pct"],
+        }
 
 
 def fetch_nifty500_instruments() -> dict[str, str]:
@@ -301,7 +344,7 @@ def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float,
     total = len(symbols)
     for index, symbol in enumerate(symbols, 1):
         if emit:
-            emit({"type": "progress", "pct": round(index / total * 100), "scanned": index})
+            emit({"type": "progress", "pct": round(index / total * 100), "scanned": index, "total": total})
         instrument_key = instruments.get(symbol)
         if not instrument_key:
             continue
@@ -432,6 +475,7 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
     if not _scan_lock.acquire(blocking=False):
         record_activity(f"Automatic scan {slot_label} skipped: another scan is still running.", "warn")
         return
+    begin_scan_progress("automatic", slot_label)
     record_activity(f"Automatic scan {slot_label} started for {INDEX_LABEL}.")
     try:
         scan_params = {
@@ -440,11 +484,15 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
             "factor": float(os.getenv("PKAMA_FACTOR", "3")),
             "vol_mult": float(os.getenv("VOLUME_MULTIPLIER", "1.5")),
         }
+        def track_progress(event: dict) -> None:
+            update_scan_progress(event)
+
         results = scan_market(
             scan_params["length"],
             scan_params["self_powered"],
             scan_params["factor"],
             scan_params["vol_mult"],
+            emit=track_progress,
         )
         save_scan_results(results, "automatic", scan_params)
         scanned_count = len(fetch_nifty500_instruments())
@@ -463,6 +511,7 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
         _state["last_scan_status"] = f"Scan error: {exc}"
         record_activity(f"Automatic scan {slot_label} failed: {exc}", "err")
     finally:
+        finish_scan_progress()
         _scan_lock.release()
 
 
@@ -583,6 +632,7 @@ def token_status():
             "saved_at": _state["last_saved_at"],
             "scanned": _state["last_scanned_count"],
             "signals": len(_state["last_results"]),
+            "scan": scan_progress_snapshot(),
         }
     )
 
@@ -596,6 +646,7 @@ def latest_results():
             "saved_at": _state["last_saved_at"],
             "scanned": _state["last_scanned_count"],
             "activity_log": _state["activity_log"],
+            "scan": scan_progress_snapshot(),
         }
     )
 
@@ -629,7 +680,10 @@ def manual_scan():
     events = queue.Queue()
 
     def emit(event):
+        update_scan_progress(event)
         events.put(event)
+
+    begin_scan_progress("manual")
 
     def worker():
         try:
@@ -662,6 +716,7 @@ def manual_scan():
             record_activity(f"Manual scan failed: {exc}", "err")
             events.put({"type": "error", "msg": str(exc)})
         finally:
+            finish_scan_progress()
             events.put(None)
             _scan_lock.release()
 
