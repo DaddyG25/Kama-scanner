@@ -2,6 +2,8 @@
 
 This Railway app scans the current NIFTY 500 constituents using the Upstox API.
 
+The current NSE constituent list is matched against Upstox's daily NSE BOD JSON instrument master before scanning. Placeholder or unavailable NSE entries are skipped, so invalid keys such as `DUMMYMHEG` do not interrupt or inflate the scan universe.
+
 ## Confirmed signal
 
 - Latest completed 60-minute candle crosses from below to above P-KAMA.
