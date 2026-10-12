@@ -244,14 +244,29 @@ let allResults   = [];
 let evtSource    = null;
 let activeFilter = 'all';
 let lastSavedAt   = null;
+let lastActivityId = 0;
 
-function log(msg, cls=''){
+function appendLogLine(msg, cls='', timestamp=null){
   const area = document.getElementById('logArea');
   const d = document.createElement('div');
   d.className = 'll'+(cls?' ll-'+cls:'');
-  d.textContent = `[${new Date().toLocaleTimeString('en-IN')}] ${msg}`;
+  d.textContent = `[${timestamp||new Date().toLocaleTimeString('en-IN')}] ${msg}`;
   area.appendChild(d);
+  while(area.children.length>200) area.removeChild(area.firstChild);
   area.scrollTop = area.scrollHeight;
+}
+
+function log(msg, cls=''){
+  appendLogLine(msg,cls);
+}
+
+function syncActivity(entries){
+  if(!Array.isArray(entries)) return;
+  entries.forEach(entry=>{
+    if(entry.id<=lastActivityId) return;
+    appendLogLine(entry.msg,entry.cls||'info',entry.time);
+    lastActivityId=entry.id;
+  });
 }
 
 function drawSpark(canvas, closes, kamas, signal){
@@ -359,7 +374,7 @@ function startScan(){
   allResults=[];
   updateStats(0);
   renderCards();
-  document.getElementById('logArea').innerHTML='';
+  log('Manual scan requested.','info');
   document.getElementById('scanBtn').disabled=true;
   document.getElementById('stopBtn').style.display='block';
   document.getElementById('progWrap').style.display='block';
@@ -475,9 +490,10 @@ async function pollAutomaticResults(){
     const d=await r.json();
     if(Array.isArray(d.results)){
       allResults=d.results;
-      updateStats(allResults.length ? 50 : 0);
+      updateStats(d.scanned||0);
       renderCards();
     }
+    syncActivity(d.activity_log);
     if(d.saved_at && d.saved_at !== lastSavedAt){
       lastSavedAt=d.saved_at;
       log(`Autosaved scan: ${d.saved_at}`,'ok');
