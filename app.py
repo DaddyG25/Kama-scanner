@@ -61,14 +61,41 @@ _state = {
     "last_results": [],
     "last_scan_time": None,
     "last_scan_status": "Waiting for Upstox login",
+    "last_scanned_count": 0,
     "last_saved_at": None,
     "last_saved_files": [],
+    "activity_log": [],
+    "activity_seq": 0,
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
 _universe_cache: dict[str, str] = {}
 _scan_lock = threading.Lock()
+_activity_lock = threading.Lock()
 _scheduler_started = False
+
+
+def record_activity(message: str, cls: str = "info") -> None:
+    """Store a server-side activity entry for the dashboard terminal."""
+    now = datetime.now(IST)
+    with _activity_lock:
+        _state["activity_seq"] += 1
+        _state["activity_log"].append(
+            {
+                "id": _state["activity_seq"],
+                "time": now.strftime("%d %b %H:%M:%S"),
+                "timestamp": now.isoformat(),
+                "msg": message,
+                "cls": cls,
+            }
+        )
+        _state["activity_log"] = _state["activity_log"][-200:]
+    if cls == "err":
+        logging.error(message)
+    elif cls == "warn":
+        logging.warning(message)
+    else:
+        logging.info(message)
 
 
 def fetch_nifty500_instruments() -> dict[str, str]:
@@ -397,9 +424,15 @@ def fingerprint(results: list[dict]) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def run_automatic_scan() -> None:
-    if not _state["access_token"] or not _scan_lock.acquire(blocking=False):
+def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
+    slot_label = scheduled_for.strftime("%H:%M") if scheduled_for else "scheduled"
+    if not _state["access_token"]:
+        record_activity(f"Automatic scan {slot_label} skipped: Upstox login is not active.", "warn")
         return
+    if not _scan_lock.acquire(blocking=False):
+        record_activity(f"Automatic scan {slot_label} skipped: another scan is still running.", "warn")
+        return
+    record_activity(f"Automatic scan {slot_label} started for {INDEX_LABEL}.")
     try:
         scan_params = {
             "length": int(os.getenv("PKAMA_LENGTH", "50")),
@@ -414,13 +447,21 @@ def run_automatic_scan() -> None:
             scan_params["vol_mult"],
         )
         save_scan_results(results, "automatic", scan_params)
+        scanned_count = len(fetch_nifty500_instruments())
         _state["last_results"] = results
+        _state["last_scanned_count"] = scanned_count
         _state["last_scan_time"] = datetime.now(IST).isoformat()
         _state["last_scan_status"] = f"Automatic scan complete: {len(results)} confirmed signal(s)"
         notify_if_new(results)
+        record_activity(
+            f"Automatic scan {slot_label} completed: {scanned_count} stocks scanned, "
+            f"{len(results)} confirmed signal(s); data autosaved.",
+            "ok",
+        )
     except Exception as exc:
         logging.exception("Automatic scan failed")
         _state["last_scan_status"] = f"Scan error: {exc}"
+        record_activity(f"Automatic scan {slot_label} failed: {exc}", "err")
     finally:
         _scan_lock.release()
 
@@ -452,7 +493,10 @@ def scheduler_loop() -> None:
         market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 40)
         if market_open and due and slot != last_slot:
             last_slot = slot
-            threading.Thread(target=run_automatic_scan, daemon=True).start()
+            session_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+            scheduled_for = session_start + timedelta(minutes=first_slot + slot * interval_minutes)
+            record_activity(f"Scheduled slot {scheduled_for.strftime('%H:%M')} reached.")
+            threading.Thread(target=run_automatic_scan, args=(scheduled_for,), daemon=True).start()
         time.sleep(20)
 
 
@@ -460,6 +504,7 @@ def start_scheduler() -> None:
     global _scheduler_started
     if not _scheduler_started:
         _scheduler_started = True
+        record_activity("Automatic scheduler active for 10:16, 11:16, 12:16, 13:16, 14:16 and 15:16 IST.")
         threading.Thread(target=scheduler_loop, daemon=True, name="p-kama-scheduler").start()
 
 
@@ -536,6 +581,7 @@ def token_status():
             "status": _state["last_scan_status"],
             "last_scan_time": _state["last_scan_time"],
             "saved_at": _state["last_saved_at"],
+            "scanned": _state["last_scanned_count"],
             "signals": len(_state["last_results"]),
         }
     )
@@ -548,6 +594,8 @@ def latest_results():
             "results": _state["last_results"],
             "status": _state["last_scan_status"],
             "saved_at": _state["last_saved_at"],
+            "scanned": _state["last_scanned_count"],
+            "activity_log": _state["activity_log"],
         }
     )
 
@@ -585,6 +633,7 @@ def manual_scan():
 
     def worker():
         try:
+            record_activity(f"Manual scan started for {INDEX_LABEL}.")
             results = scan_market(length, self_powered, factor, vol_mult, emit=emit)
             save_scan_results(
                 results,
@@ -596,13 +645,21 @@ def manual_scan():
                     "vol_mult": vol_mult,
                 },
             )
+            scanned_count = len(fetch_nifty500_instruments())
             _state["last_results"] = results
+            _state["last_scanned_count"] = scanned_count
             _state["last_scan_time"] = datetime.now(IST).isoformat()
             _state["last_scan_status"] = f"Manual scan complete: {len(results)} confirmed signal(s)"
             notify_if_new(results)
-            events.put({"type": "done", "scanned": len(fetch_nifty500_instruments())})
+            record_activity(
+                f"Manual scan completed: {scanned_count} stocks scanned, "
+                f"{len(results)} confirmed signal(s); data autosaved.",
+                "ok",
+            )
+            events.put({"type": "done", "scanned": scanned_count})
         except Exception as exc:
             _state["last_scan_status"] = f"Scan error: {exc}"
+            record_activity(f"Manual scan failed: {exc}", "err")
             events.put({"type": "error", "msg": str(exc)})
         finally:
             events.put(None)
