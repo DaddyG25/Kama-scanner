@@ -269,6 +269,28 @@ function syncActivity(entries){
   });
 }
 
+function syncScanProgress(scan){
+  if(!scan) return;
+  const scanBtn=document.getElementById('scanBtn');
+  const progWrap=document.getElementById('progWrap');
+  const progFill=document.getElementById('progFill');
+  if(scan.running){
+    const label=scan.mode==='automatic'?'AUTO SCAN':'MANUAL SCAN';
+    scanBtn.disabled=true;
+    scanBtn.textContent=`${label} ${scan.scanned||0}/${scan.total||500}`;
+    progWrap.style.display='block';
+    progFill.style.width=(scan.pct||0)+'%';
+    updateStats(scan.scanned||0);
+  }else if(!evtSource){
+    scanBtn.disabled=false;
+    scanBtn.textContent='▶ START SCAN';
+    setTimeout(()=>{
+      progWrap.style.display='none';
+      progFill.style.width='0%';
+    },1200);
+  }
+}
+
 function drawSpark(canvas, closes, kamas, signal){
   const W=80, H=30;
   canvas.width=W; canvas.height=H;
@@ -473,8 +495,7 @@ setInterval(async()=>{
     badge.className='badge ok'; badge.textContent='✓ LOGGED IN';
     banner.classList.add('hidden');
     okBanner.classList.remove('hidden');
-    scanBtn.disabled=false;
-    scanBtn.textContent='▶ START SCAN';
+    syncScanProgress(d.scan);
   } else {
     badge.className='badge no'; badge.textContent='NOT LOGGED IN';
     banner.classList.remove('hidden');
@@ -488,12 +509,13 @@ async function pollAutomaticResults(){
   try{
     const r=await fetch('/api/latest-results');
     const d=await r.json();
-    if(Array.isArray(d.results)){
+    if(Array.isArray(d.results) && !evtSource){
       allResults=d.results;
       updateStats(d.scanned||0);
       renderCards();
     }
     syncActivity(d.activity_log);
+    syncScanProgress(d.scan);
     if(d.saved_at && d.saved_at !== lastSavedAt){
       lastSavedAt=d.saved_at;
       log(`Autosaved scan: ${d.saved_at}`,'ok');
@@ -501,7 +523,7 @@ async function pollAutomaticResults(){
   }catch(e){ /* the next poll will retry */ }
 }
 pollAutomaticResults();
-setInterval(pollAutomaticResults,30000);
+setInterval(pollAutomaticResults,3000);
 
 renderCards();
 </script>
