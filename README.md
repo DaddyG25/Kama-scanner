@@ -9,7 +9,7 @@ This Railway app scans the current NIFTY 500 constituents using the Upstox API.
 - Latest completed daily candle crosses from below to above P-KAMA.
 - Daily volume is at least `VOLUME_MULTIPLIER` times the previous 20-day average.
 
-The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs at `10:16`, `11:16`, `12:16`, `13:16`, `14:16`, and `15:16` IST during NSE cash-market hours. The `09:15` opening candle is excluded. Every scheduled slot, scan start, completion, autosave, skip, or error is recorded in the dashboard terminal and Railway service logs. Each completed scan is automatically saved as a timestamped JSON and CSV file, and the dashboard provides a download link for the latest CSV. A NIFTY 500 scan is larger than NIFTY 50 and can take several minutes.
+The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs at `10:16`, `11:16`, `12:16`, `13:16`, `14:16`, and `15:16` IST during NSE cash-market hours. The `09:15` opening candle is excluded. Every scheduled slot, scan start, completion, autosave, skip, or error is recorded in the dashboard terminal and Railway service logs. Automatic scans also update the dashboard's live scanned counter, progress bar, and scan button every few seconds. Each completed scan is automatically saved as a timestamped JSON and CSV file, and the dashboard provides a download link for the latest CSV. A NIFTY 500 scan is larger than NIFTY 50 and can take several minutes.
 
 ## Railway variables
 
