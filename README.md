@@ -9,9 +9,13 @@ The current NSE constituent list is matched against Upstox's daily NSE BOD JSON 
 - **1H signal:** the latest completed 60-minute candle crosses from below to above P-KAMA, and its volume is at least `VOLUME_MULTIPLIER` times the previous 20-bar average.
 - **1D signal:** the latest completed daily candle crosses from below to above P-KAMA, and its volume is at least `VOLUME_MULTIPLIER` times the previous 20-day average.
 
-The 1H and 1D scans run concurrently. A stock can appear in either list independently; it no longer needs to cross on both timeframes together.
+The timeframes are evaluated independently. A stock can appear in either list; it does not need to cross on both timeframes together. A manual scan started after 15:35 IST runs 1H and 1D concurrently. Before 15:35 it runs 1H only, because the current daily candle is not yet confirmed.
 
-The dashboard scan and the automatic scanner use the same logic. Automatic scanning runs at `10:16`, `11:16`, `12:16`, `13:16`, `14:16`, and `15:16` IST during NSE cash-market hours. The `09:15` opening candle is excluded. Every scheduled slot, scan start, completion, autosave, skip, or error is recorded in the dashboard terminal and Railway service logs. Automatic scans also update the dashboard's live scanned counter, progress bar, and scan button every few seconds. Each completed scan is automatically saved as a timestamped JSON and CSV file, and the dashboard provides a download link for the latest CSV. A NIFTY 500 scan is larger than NIFTY 50 and can take several minutes.
+Automatic 1H scans run at `10:16`, `11:16`, `12:16`, `13:16`, `14:16`, and `15:16` IST. The `09:15` opening candle is excluded. The automatic 1D scan runs once at `15:35` IST, after the NSE cash session has closed and the completed candle is available from Upstox. If another scan is still running, the 1D scan waits and starts afterward. Every scheduled slot, scan start, completion, autosave, wait, skip, or error is recorded in the dashboard terminal and Railway service logs.
+
+P-KAMA is recursive, so the scanner requests 90 calendar days of hourly history and 10 years of daily history before evaluating the latest cross. This warm-up prevents a short-history initialization from materially shifting the P-KAMA line away from a long-running chart.
+
+Every completed timeframe scan is appended to its own cumulative CSV journal, including scans that find zero signals. The dashboard has separate **1H JOURNAL** and **1D JOURNAL** download links. It also saves date-specific journal files plus the latest run for each timeframe. A NIFTY 500 scan can take several minutes.
 
 ## Railway variables
 
@@ -28,8 +32,8 @@ SMTP_PASSWORD=...
 EMAIL_FROM=...
 EMAIL_TO=...
 VOLUME_MULTIPLIER=1.5
-HOURLY_LOOKBACK_DAYS=60
-DAILY_LOOKBACK_DAYS=365
+HOURLY_LOOKBACK_DAYS=90
+DAILY_LOOKBACK_DAYS=3650
 UPSTOX_THROTTLE_SECONDS=0.35
 AUTO_SCAN_INTERVAL_MINUTES=60
 AUTO_SCAN_DELAY_MINUTES=1
@@ -40,5 +44,5 @@ Register `https://YOUR-RAILWAY-DOMAIN/callback` as the Upstox app redirect URL. 
 
 The existing `railway.json` starts the app with one Gunicorn worker, which is required because the automatic scheduler runs inside the web process.
 
-Saved files are written to `SCAN_DATA_DIR` (default `data`). On Railway, use a mounted persistent directory if you need the saved history to survive service restarts or redeploys; otherwise the latest files are available while the running service keeps its filesystem.
+Saved files are written to `SCAN_DATA_DIR` (default `data`). On Railway, mount a persistent Volume and set `SCAN_DATA_DIR` to that Volume's mount path (for example `/data`) if the journals must survive service restarts or redeploys. Without a Volume, Railway's deployment filesystem is ephemeral.
 
