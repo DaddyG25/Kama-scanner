@@ -156,8 +156,8 @@ header{display:flex;align-items:center;justify-content:space-between;
   <div class="login-inner">
     <div class="login-title">🔐 Login Required</div>
     <div class="login-desc">
-      Connect Upstox once each trading morning. Automatic 1H + daily scans
-      will then run during market hours and email newly confirmed signals.
+      Connect Upstox once each trading morning. Automatic 1H scans run during
+      market hours; the 1D scan runs once after the daily candle closes.
     </div>
     <a class="btn-login" href="{{ login_url }}">
       ⚡ Login with Upstox
@@ -232,7 +232,12 @@ header{display:flex;align-items:center;justify-content:space-between;
 <div class="results-wrap">
   <div class="results-hdr">
     <span>SEPARATE 1H + 1D P-KAMA CROSS + HIGH VOLUME</span>
-    <span><a href="/api/download/latest.csv" id="downloadLink">DOWNLOAD SAVED CSV</a> &nbsp; <span id="resCount">0 signals</span></span>
+    <span>
+      <a href="/api/download/journal/1h.csv">1H JOURNAL</a> &nbsp;·&nbsp;
+      <a href="/api/download/journal/1d.csv">1D JOURNAL</a> &nbsp;·&nbsp;
+      <a href="/api/download/latest.csv" id="downloadLink">LATEST SCAN</a>
+      &nbsp; <span id="resCount">0 signals</span>
+    </span>
   </div>
   <div id="cardContainer">
     <div class="empty"><div class="icon">📡</div><p>Run a scan to see signals</p></div>
@@ -246,6 +251,7 @@ let activeFilter = 'all';
 let lastSavedAt   = null;
 let lastActivityId = 0;
 let manualProgress = {oneHour:0,oneDay:0,pct1h:0,pct1d:0,total1h:500,total1d:500};
+let manualActiveTimeframes = ['1h','1d'];
 let tokenConnected = document.getElementById('tokenBadge').classList.contains('ok');
 
 function appendLogLine(msg, cls='', timestamp=null){
@@ -280,8 +286,12 @@ function syncScanProgress(scan){
   const oneDay=scan.one_day||{};
   if(scan.running){
     const label=scan.mode==='automatic'?'AUTO SCAN':'MANUAL SCAN';
+    const active=Array.isArray(scan.timeframes)&&scan.timeframes.length?scan.timeframes:['1h','1d'];
+    const progressText=active.map(tf=>tf==='1h'
+      ?`1H ${oneHour.scanned||0}/${oneHour.total||500}`
+      :`1D ${oneDay.scanned||0}/${oneDay.total||500}`).join(' · ');
     scanBtn.disabled=true;
-    scanBtn.textContent=`${label} · 1H ${oneHour.scanned||0}/${oneHour.total||500} · 1D ${oneDay.scanned||0}/${oneDay.total||500}`;
+    scanBtn.textContent=`${label} · ${progressText}`;
     progWrap.style.display='block';
     progFill.style.width=(scan.pct||0)+'%';
     updateStats({oneHour:oneHour.scanned||0,oneDay:oneDay.scanned||0});
@@ -397,6 +407,7 @@ function updateStats(scanned){
 function startScan(){
   allResults=[];
   manualProgress={oneHour:0,oneDay:0,pct1h:0,pct1d:0,total1h:500,total1d:500};
+  manualActiveTimeframes=['1h','1d'];
   updateStats({oneHour:0,oneDay:0});
   renderCards();
   log('Manual scan requested.','info');
@@ -420,14 +431,22 @@ function startScan(){
   evtSource.onmessage=e=>{
     const d=JSON.parse(e.data);
     if(d.type==='log') log(d.msg,d.cls||'');
+    else if(d.type==='start'){
+      manualActiveTimeframes=Array.isArray(d.timeframes)?d.timeframes:['1h'];
+    }
     else if(d.type==='progress'){
       if(d.timeframe==='1h'){
         manualProgress.oneHour=d.scanned; manualProgress.pct1h=d.pct; manualProgress.total1h=d.total;
       }else{
         manualProgress.oneDay=d.scanned; manualProgress.pct1d=d.pct; manualProgress.total1d=d.total;
       }
-      document.getElementById('progFill').style.width=((manualProgress.pct1h+manualProgress.pct1d)/2)+'%';
-      document.getElementById('scanBtn').textContent=`MANUAL SCAN · 1H ${manualProgress.oneHour}/${manualProgress.total1h} · 1D ${manualProgress.oneDay}/${manualProgress.total1d}`;
+      const pcts=manualActiveTimeframes.map(tf=>tf==='1h'?manualProgress.pct1h:manualProgress.pct1d);
+      const pct=pcts.reduce((sum,value)=>sum+value,0)/(pcts.length||1);
+      const progressText=manualActiveTimeframes.map(tf=>tf==='1h'
+        ?`1H ${manualProgress.oneHour}/${manualProgress.total1h}`
+        :`1D ${manualProgress.oneDay}/${manualProgress.total1d}`).join(' · ');
+      document.getElementById('progFill').style.width=pct+'%';
+      document.getElementById('scanBtn').textContent=`MANUAL SCAN · ${progressText}`;
       updateStats(manualProgress);
     }
     else if(d.type==='signal'){
