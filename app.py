@@ -1068,7 +1068,7 @@ def get_journal_payload(timeframe: str = "all") -> dict:
         scans = [
             dict(row)
             for row in connection.execute(
-                f"SELECT * FROM scan_runs {where} ORDER BY scanned_at DESC LIMIT 250",
+                f"SELECT * FROM scan_runs {where} ORDER BY scanned_at DESC",
                 params,
             ).fetchall()
         ]
