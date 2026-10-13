@@ -46,5 +46,5 @@ Register `https://YOUR-RAILWAY-DOMAIN/callback` as the Upstox app redirect URL. 
 
 The existing `railway.json` starts the app with one Gunicorn worker, which is required because the automatic scheduler runs inside the web process.
 
-Saved files and the internal journal database are written to `SCAN_DATA_DIR` (default `data`). On Railway, mount a persistent Volume and set `SCAN_DATA_DIR` to that Volume's mount path (for example `/data`) so the journal survives service restarts and redeploys. Without a Volume, Railway's deployment filesystem is ephemeral.
+Saved files and the internal journal database are written to an attached Railway Volume automatically through `RAILWAY_VOLUME_MOUNT_PATH`; outside Railway they use `SCAN_DATA_DIR` (default `data`). Attach a persistent Volume to the scanner service—`/app/data` or `/data` are suitable mount paths—so the journal survives service restarts and redeploys. Without a Volume, Railway's deployment filesystem is ephemeral.
 

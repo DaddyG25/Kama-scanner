@@ -104,6 +104,15 @@ _journal_lock = threading.Lock()
 _scheduler_started = False
 
 
+def scan_data_directory() -> str:
+    """Prefer an attached Railway Volume, then the configured local directory."""
+    return (
+        os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+        or os.getenv("SCAN_DATA_DIR")
+        or "data"
+    )
+
+
 def record_activity(message: str, cls: str = "info") -> None:
     """Store a server-side activity entry for the dashboard terminal."""
     now = datetime.now(IST)
@@ -622,7 +631,7 @@ def write_atomically(path: str, content: str) -> None:
 
 
 def journal_database_path() -> str:
-    directory = os.getenv("SCAN_DATA_DIR", "data")
+    directory = scan_data_directory()
     os.makedirs(directory, exist_ok=True)
     return os.path.join(directory, "pkama_journal.db")
 
@@ -706,7 +715,7 @@ def migrate_legacy_journal_files(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if marker:
         return
-    journal_directory = os.path.join(os.getenv("SCAN_DATA_DIR", "data"), "journals")
+    journal_directory = os.path.join(scan_data_directory(), "journals")
     for timeframe in ("1h", "1d"):
         path = os.path.join(journal_directory, f"journal_{timeframe}.csv")
         if not os.path.exists(path):
@@ -857,7 +866,7 @@ def append_timeframe_journal(
     scanned_symbols: int,
 ) -> list[str]:
     """Append one auditable journal entry for every scan, including zero-signal runs."""
-    directory = os.getenv("SCAN_DATA_DIR", "data")
+    directory = scan_data_directory()
     journal_directory = os.path.join(directory, "journals")
     os.makedirs(journal_directory, exist_ok=True)
     saved_at = datetime.now(IST)
@@ -1111,7 +1120,7 @@ def signal_journal_csv(timeframe: str) -> str:
 
 def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict:
     """Save each completed scan as timestamped JSON/CSV and update latest copies."""
-    directory = os.getenv("SCAN_DATA_DIR", "data")
+    directory = scan_data_directory()
     os.makedirs(directory, exist_ok=True)
     saved_at = datetime.now(IST)
     stamp = saved_at.strftime("%Y%m%d_%H%M%S")
@@ -1449,7 +1458,7 @@ def latest_results():
 
 @app.route("/api/download/latest.csv")
 def download_latest_results():
-    path = os.path.join(os.getenv("SCAN_DATA_DIR", "data"), "latest_results.csv")
+    path = os.path.join(scan_data_directory(), "latest_results.csv")
     if not os.path.exists(path):
         return jsonify({"error": "No scan has been saved yet."}), 404
     return send_file(path, mimetype="text/csv", as_attachment=True, download_name="pkama_latest_results.csv")
