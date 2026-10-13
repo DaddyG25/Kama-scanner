@@ -58,6 +58,11 @@ UPSTOX_NSE_INSTRUMENTS_URL = os.getenv(
     "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
 )
 VOLUME_LENGTH = 20
+# These are Upstox V3's supported retrieval windows for the selected units.
+# Keep them fixed so an older Railway variable (60/365) cannot reintroduce the
+# short warm-up that caused materially incorrect recursive P-KAMA values.
+HOURLY_HISTORY_DAYS = 90
+DAILY_HISTORY_DAYS = 3650
 
 _state = {
     "access_token": None,
@@ -473,11 +478,11 @@ def scan_timeframe(
         try:
             if timeframe == "1h":
                 candles = get_upstox_candles(
-                    instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "90"))
+                    instrument_key, "hours", "1", HOURLY_HISTORY_DAYS
                 )
             else:
                 candles = get_upstox_candles(
-                    instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "3650"))
+                    instrument_key, "days", "1", DAILY_HISTORY_DAYS
                 )
             signal = evaluate_timeframe_signal(
                 candles, timeframe, length, self_powered, factor, vol_mult
