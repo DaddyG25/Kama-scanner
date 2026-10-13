@@ -15,7 +15,9 @@ Automatic 1H scans run at `10:16`, `11:16`, `12:16`, `13:16`, `14:16`, and `15:1
 
 P-KAMA is recursive, so the scanner requests 90 calendar days of hourly history and 10 years of daily history before evaluating the latest cross. This warm-up prevents a short-history initialization from materially shifting the P-KAMA line away from a long-running chart.
 
-Every completed timeframe scan is appended to its own cumulative CSV journal, including scans that find zero signals. The dashboard has separate **1H JOURNAL** and **1D JOURNAL** download links. It also saves date-specific journal files plus the latest run for each timeframe. A NIFTY 500 scan can take several minutes.
+Every completed timeframe scan is stored in the internal SQLite journal, including scans that find zero signals. Each highlighted stock is retained separately for 1H and 1D and followed for 21 completed NSE trading sessions. The Journal screen shows the entry close, latest close, current return, maximum favorable excursion, maximum adverse excursion, and closing returns after 1, 3, 5, 10, and 21 sessions. The post-close 1D process refreshes all open journal records automatically. The Journal screen can still export the tracked records as CSV when needed.
+
+Earlier cumulative CSV journals are imported automatically the first time the database is opened, when those files are present. The live database is stored at `SCAN_DATA_DIR/pkama_journal.db`. A NIFTY 500 scan can take several minutes.
 
 ## Railway variables
 
@@ -44,5 +46,5 @@ Register `https://YOUR-RAILWAY-DOMAIN/callback` as the Upstox app redirect URL. 
 
 The existing `railway.json` starts the app with one Gunicorn worker, which is required because the automatic scheduler runs inside the web process.
 
-Saved files are written to `SCAN_DATA_DIR` (default `data`). On Railway, mount a persistent Volume and set `SCAN_DATA_DIR` to that Volume's mount path (for example `/data`) if the journals must survive service restarts or redeploys. Without a Volume, Railway's deployment filesystem is ephemeral.
+Saved files and the internal journal database are written to `SCAN_DATA_DIR` (default `data`). On Railway, mount a persistent Volume and set `SCAN_DATA_DIR` to that Volume's mount path (for example `/data`) so the journal survives service restarts and redeploys. Without a Volume, Railway's deployment filesystem is ephemeral.
 

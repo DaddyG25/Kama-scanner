@@ -21,9 +21,11 @@ import os
 import queue
 import secrets
 import smtplib
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, time as clock_time, timedelta
 from email.message import EmailMessage
 from urllib.parse import quote
@@ -587,12 +589,257 @@ JOURNAL_FIELDS = [
     "volume_multiplier",
 ]
 
+SIGNAL_JOURNAL_FIELDS = [
+    "timeframe",
+    "symbol",
+    "candle_time",
+    "identified_at",
+    "entry_price",
+    "pkama",
+    "volume_ratio",
+    "distance_pct",
+    "latest_price",
+    "latest_date",
+    "current_return_pct",
+    "best_move_pct",
+    "worst_move_pct",
+    "return_1d",
+    "return_3d",
+    "return_1w",
+    "return_2w",
+    "return_1m",
+    "trading_days",
+    "status",
+    "last_updated_at",
+]
+
 
 def write_atomically(path: str, content: str) -> None:
     temp_path = f"{path}.tmp"
     with open(temp_path, "w", encoding="utf-8", newline="") as handle:
         handle.write(content)
     os.replace(temp_path, path)
+
+
+def journal_database_path() -> str:
+    directory = os.getenv("SCAN_DATA_DIR", "data")
+    os.makedirs(directory, exist_ok=True)
+    return os.path.join(directory, "pkama_journal.db")
+
+
+def journal_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(journal_database_path(), timeout=30)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=30000")
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS scan_runs (
+            scan_id TEXT PRIMARY KEY,
+            scanned_at TEXT NOT NULL,
+            scan_type TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            status TEXT NOT NULL,
+            scanned_symbols INTEGER NOT NULL,
+            signal_count INTEGER NOT NULL,
+            pkama_length INTEGER NOT NULL,
+            volume_multiplier REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS signal_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timeframe TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            candle_time TEXT NOT NULL,
+            identified_at TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            pkama REAL,
+            volume_ratio REAL,
+            distance_pct REAL,
+            latest_price REAL,
+            latest_date TEXT,
+            current_return_pct REAL,
+            best_move_pct REAL,
+            worst_move_pct REAL,
+            return_1d REAL,
+            return_3d REAL,
+            return_1w REAL,
+            return_2w REAL,
+            return_1m REAL,
+            trading_days INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'TRACKING',
+            last_updated_at TEXT,
+            UNIQUE(timeframe, symbol, candle_time)
+        );
+
+        CREATE TABLE IF NOT EXISTS journal_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_signal_journal_status
+            ON signal_journal(status, identified_at);
+        CREATE INDEX IF NOT EXISTS idx_signal_journal_timeframe
+            ON signal_journal(timeframe, identified_at);
+        CREATE INDEX IF NOT EXISTS idx_scan_runs_timeframe
+            ON scan_runs(timeframe, scanned_at);
+        """
+    )
+    migrate_legacy_journal_files(connection)
+    return connection
+
+
+@contextmanager
+def open_journal_database():
+    connection = journal_connection()
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def migrate_legacy_journal_files(connection: sqlite3.Connection) -> None:
+    """Import any earlier CSV journal once when upgrading to the in-app journal."""
+    marker = connection.execute(
+        "SELECT value FROM journal_meta WHERE key = 'legacy_csv_migrated'"
+    ).fetchone()
+    if marker:
+        return
+    journal_directory = os.path.join(os.getenv("SCAN_DATA_DIR", "data"), "journals")
+    for timeframe in ("1h", "1d"):
+        path = os.path.join(journal_directory, f"journal_{timeframe}.csv")
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                scan_date = row.get("scan_date") or datetime.now(IST).date().isoformat()
+                scan_clock = (row.get("scan_time") or "00:00:00").split()[0]
+                try:
+                    identified_at = datetime.fromisoformat(
+                        f"{scan_date}T{scan_clock}"
+                    ).replace(tzinfo=IST).isoformat()
+                except ValueError:
+                    identified_at = datetime.now(IST).isoformat()
+                scan_id = row.get("scan_id") or f"legacy_{timeframe}_{identified_at}"
+                signal_count = int(float(row.get("signal_count") or 0))
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO scan_runs (
+                        scan_id, scanned_at, scan_type, timeframe, status,
+                        scanned_symbols, signal_count, pkama_length, volume_multiplier
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scan_id,
+                        identified_at,
+                        row.get("scan_type") or "legacy",
+                        timeframe,
+                        row.get("status") or ("SIGNALS" if signal_count else "NO_SIGNALS"),
+                        int(float(row.get("scanned_symbols") or 0)),
+                        signal_count,
+                        int(float(row.get("pkama_length") or 50)),
+                        float(row.get("volume_multiplier") or 1.5),
+                    ),
+                )
+                symbol = (row.get("symbol") or "").strip()
+                if not symbol:
+                    continue
+                entry = float(row.get("close") or 0)
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO signal_journal (
+                        timeframe, symbol, candle_time, identified_at, entry_price,
+                        pkama, volume_ratio, distance_pct, latest_price, latest_date,
+                        current_return_pct, best_move_pct, worst_move_pct,
+                        trading_days, status, last_updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 'TRACKING', ?)
+                    """,
+                    (
+                        timeframe,
+                        symbol,
+                        row.get("candle_time") or identified_at,
+                        identified_at,
+                        entry,
+                        float(row.get("pkama") or 0),
+                        float(row.get("volume_ratio") or 0),
+                        float(row.get("distance_pct") or 0),
+                        entry,
+                        row.get("candle_time") or identified_at,
+                        identified_at,
+                    ),
+                )
+    connection.execute(
+        "INSERT OR REPLACE INTO journal_meta (key, value) VALUES ('legacy_csv_migrated', ?)",
+        (datetime.now(IST).isoformat(),),
+    )
+
+
+def record_scan_in_journal_database(
+    scan_id: str,
+    saved_at: datetime,
+    timeframe: str,
+    results: list[dict],
+    scan_type: str,
+    params: dict,
+    scanned_symbols: int,
+) -> None:
+    """Persist the scan audit row and any newly highlighted stocks."""
+    status = "SIGNALS" if results else "NO_SIGNALS"
+    with open_journal_database() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO scan_runs (
+                scan_id, scanned_at, scan_type, timeframe, status,
+                scanned_symbols, signal_count, pkama_length, volume_multiplier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scan_id,
+                saved_at.isoformat(),
+                scan_type,
+                timeframe,
+                status,
+                scanned_symbols,
+                len(results),
+                params["length"],
+                params["vol_mult"],
+            ),
+        )
+        for result in results:
+            candle_time = result.get("sig_time", "")
+            try:
+                candle_stamp = datetime.fromisoformat(
+                    str(candle_time).replace("Z", "+00:00")
+                )
+                if candle_stamp.tzinfo is None:
+                    candle_stamp = candle_stamp.replace(tzinfo=IST)
+                latest_date = candle_stamp.astimezone(IST).date().isoformat()
+            except (TypeError, ValueError):
+                latest_date = ""
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO signal_journal (
+                    timeframe, symbol, candle_time, identified_at, entry_price,
+                    pkama, volume_ratio, distance_pct, latest_price, latest_date,
+                    current_return_pct, best_move_pct, worst_move_pct,
+                    trading_days, status, last_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 'TRACKING', ?)
+                """,
+                (
+                    timeframe,
+                    result.get("symbol", ""),
+                    candle_time,
+                    saved_at.isoformat(),
+                    result.get("ltp", 0),
+                    result.get("pkama"),
+                    result.get("vol_ratio"),
+                    result.get("dist_pct"),
+                    result.get("ltp", 0),
+                    latest_date,
+                    saved_at.isoformat(),
+                ),
+            )
 
 
 def update_timeframe_results(results_by_timeframe: dict[str, list[dict]]) -> None:
@@ -661,7 +908,205 @@ def append_timeframe_journal(
         writer.writeheader()
         writer.writerows(rows)
         write_atomically(latest_path, output.getvalue())
+        record_scan_in_journal_database(
+            scan_id,
+            saved_at,
+            timeframe,
+            results,
+            scan_type,
+            params,
+            scanned_symbols,
+        )
     return [cumulative_path, daily_path, latest_path]
+
+
+def percent_change(value: float | None, entry: float) -> float | None:
+    if value is None or not entry:
+        return None
+    return round((float(value) - entry) / entry * 100, 2)
+
+
+def update_signal_journal_tracking() -> dict:
+    """Update open signals with the next 21 completed trading-day candles."""
+    if not _state["access_token"]:
+        raise RuntimeError("Upstox login is required to update journal performance")
+    with _journal_lock:
+        with open_journal_database() as connection:
+            records = connection.execute(
+                "SELECT * FROM signal_journal WHERE status = 'TRACKING' ORDER BY identified_at"
+            ).fetchall()
+
+    if not records:
+        return {"tracked": 0, "completed": 0, "failed": 0}
+
+    instruments = fetch_nifty500_instruments()
+    tracked = 0
+    completed = 0
+    failed = 0
+    for record in records:
+        instrument_key = instruments.get(record["symbol"])
+        if not instrument_key:
+            failed += 1
+            continue
+        try:
+            daily_candles = get_upstox_candles(instrument_key, "days", "1", 120)
+            daily_candles = completed_candles(daily_candles, "day")
+            signal_stamp = datetime.fromisoformat(
+                str(record["candle_time"]).replace("Z", "+00:00")
+            )
+            if signal_stamp.tzinfo is None:
+                signal_stamp = signal_stamp.replace(tzinfo=IST)
+            signal_date = signal_stamp.astimezone(IST).date()
+            future = []
+            same_day_daily = None
+            for candle in daily_candles:
+                stamp = candle["date"]
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=IST)
+                candle_date = stamp.astimezone(IST).date()
+                if candle_date == signal_date:
+                    same_day_daily = candle
+                elif candle_date > signal_date:
+                    future.append(candle)
+            future = future[:21]
+
+            # For a 1H signal, include only hourly candles that occurred after
+            # the signal on its own day. This captures same-day follow-through
+            # without contaminating MFE/MAE with price action before the alert.
+            same_day_after_signal = []
+            if record["timeframe"] == "1h":
+                hourly_candles = get_upstox_candles(
+                    instrument_key, "hours", "1", HOURLY_HISTORY_DAYS
+                )
+                hourly_candles = completed_candles(hourly_candles, "60minute")
+                for candle in hourly_candles:
+                    stamp = candle["date"]
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=IST)
+                    stamp = stamp.astimezone(IST)
+                    if stamp > signal_stamp.astimezone(IST) and stamp.date() == signal_date:
+                        same_day_after_signal.append(candle)
+
+            movement_candles = same_day_after_signal + future
+            if future:
+                latest_candle = future[-1]
+            elif same_day_daily is not None:
+                latest_candle = same_day_daily
+            elif same_day_after_signal:
+                latest_candle = same_day_after_signal[-1]
+            else:
+                continue
+
+            entry = float(record["entry_price"])
+            latest = float(latest_candle["close"])
+            if movement_candles:
+                best_high = max(float(candle["high"]) for candle in movement_candles)
+                worst_low = min(float(candle["low"]) for candle in movement_candles)
+            else:
+                best_high = latest
+                worst_low = latest
+
+            def close_return(day_number: int) -> float | None:
+                if len(future) < day_number:
+                    return None
+                return percent_change(float(future[day_number - 1]["close"]), entry)
+
+            status = "COMPLETED" if len(future) >= 21 else "TRACKING"
+            updated_at = datetime.now(IST).isoformat()
+            latest_stamp = latest_candle["date"]
+            if latest_stamp.tzinfo is None:
+                latest_stamp = latest_stamp.replace(tzinfo=IST)
+            with _journal_lock:
+                with open_journal_database() as connection:
+                    connection.execute(
+                        """
+                        UPDATE signal_journal SET
+                            latest_price = ?, latest_date = ?, current_return_pct = ?,
+                            best_move_pct = ?, worst_move_pct = ?, return_1d = ?,
+                            return_3d = ?, return_1w = ?, return_2w = ?, return_1m = ?,
+                            trading_days = ?, status = ?, last_updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            latest,
+                            latest_stamp.astimezone(IST).date().isoformat(),
+                            percent_change(latest, entry),
+                            max(0.0, percent_change(best_high, entry) or 0.0),
+                            min(0.0, percent_change(worst_low, entry) or 0.0),
+                            close_return(1),
+                            close_return(3),
+                            close_return(5),
+                            close_return(10),
+                            close_return(21),
+                            len(future),
+                            status,
+                            updated_at,
+                            record["id"],
+                        ),
+                    )
+            tracked += 1
+            if status == "COMPLETED":
+                completed += 1
+        except Exception as exc:
+            failed += 1
+            logging.warning("Journal tracking failed for %s: %s", record["symbol"], exc)
+        time.sleep(float(os.getenv("UPSTOX_THROTTLE_SECONDS", "0.35")))
+    return {"tracked": tracked, "completed": completed, "failed": failed}
+
+
+def get_journal_payload(timeframe: str = "all") -> dict:
+    where = "" if timeframe == "all" else "WHERE timeframe = ?"
+    params = () if timeframe == "all" else (timeframe,)
+    with open_journal_database() as connection:
+        signals = [
+            dict(row)
+            for row in connection.execute(
+                f"SELECT * FROM signal_journal {where} ORDER BY identified_at DESC",
+                params,
+            ).fetchall()
+        ]
+        scans = [
+            dict(row)
+            for row in connection.execute(
+                f"SELECT * FROM scan_runs {where} ORDER BY scanned_at DESC LIMIT 250",
+                params,
+            ).fetchall()
+        ]
+    current_values = [
+        row["current_return_pct"]
+        for row in signals
+        if row["current_return_pct"] is not None
+    ]
+    completed_values = [
+        row["return_1m"] for row in signals if row["return_1m"] is not None
+    ]
+    summary = {
+        "signals": len(signals),
+        "tracking": sum(row["status"] == "TRACKING" for row in signals),
+        "completed": sum(row["status"] == "COMPLETED" for row in signals),
+        "positive_now": sum(value > 0 for value in current_values),
+        "average_current_return": round(sum(current_values) / len(current_values), 2)
+        if current_values
+        else None,
+        "one_month_win_rate": round(
+            sum(value > 0 for value in completed_values) / len(completed_values) * 100, 1
+        )
+        if completed_values
+        else None,
+        "scan_runs": len(scans),
+    }
+    return {"timeframe": timeframe, "summary": summary, "signals": signals, "scans": scans}
+
+
+def signal_journal_csv(timeframe: str) -> str:
+    payload = get_journal_payload(timeframe)
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output, fieldnames=SIGNAL_JOURNAL_FIELDS, extrasaction="ignore"
+    )
+    writer.writeheader()
+    writer.writerows(payload["signals"])
+    return output.getvalue()
 
 
 def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict:
@@ -786,6 +1231,17 @@ def run_automatic_scan(
                 )
             )
         _state["last_saved_files"].extend(journal_files)
+        if "1d" in timeframes:
+            try:
+                record_activity("Updating one-month performance for highlighted stocks.")
+                tracking = update_signal_journal_tracking()
+                record_activity(
+                    f"Journal performance updated: {tracking['tracked']} tracked, "
+                    f"{tracking['completed']} completed, {tracking['failed']} failed.",
+                    "ok" if not tracking["failed"] else "warn",
+                )
+            except Exception as exc:
+                record_activity(f"Journal performance update failed: {exc}", "warn")
         one_hour_count = sum(row["timeframe"] == "1h" for row in results)
         one_day_count = sum(row["timeframe"] == "1d" for row in results)
         _state["last_scanned_count"] = scanned_count
@@ -1003,16 +1459,38 @@ def download_latest_results():
 def download_journal(timeframe: str):
     if timeframe not in {"1h", "1d"}:
         return jsonify({"error": "Timeframe must be 1h or 1d."}), 400
-    path = os.path.join(
-        os.getenv("SCAN_DATA_DIR", "data"), "journals", f"journal_{timeframe}.csv"
-    )
-    if not os.path.exists(path):
-        return jsonify({"error": f"No {timeframe.upper()} journal has been saved yet."}), 404
-    return send_file(
-        path,
+    return Response(
+        signal_journal_csv(timeframe),
         mimetype="text/csv",
-        as_attachment=True,
-        download_name=f"pkama_{timeframe}_journal.csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=pkama_{timeframe}_signal_journal.csv"
+        },
+    )
+
+
+@app.route("/journal")
+def journal_page():
+    return render_template("journal.html")
+
+
+@app.route("/api/journal")
+def journal_api():
+    timeframe = request.args.get("timeframe", "all").lower()
+    if timeframe not in {"all", "1h", "1d"}:
+        return jsonify({"error": "Timeframe must be all, 1h, or 1d."}), 400
+    return jsonify(get_journal_payload(timeframe))
+
+
+@app.route("/api/journal/download/<timeframe>.csv")
+def journal_signal_download(timeframe: str):
+    if timeframe not in {"all", "1h", "1d"}:
+        return jsonify({"error": "Timeframe must be all, 1h, or 1d."}), 400
+    return Response(
+        signal_journal_csv(timeframe),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=pkama_{timeframe}_signal_journal.csv"
+        },
     )
 
 
@@ -1086,6 +1564,17 @@ def manual_scan():
                     )
                 )
             _state["last_saved_files"].extend(journal_files)
+            if "1d" in timeframes:
+                try:
+                    record_activity("Updating one-month performance for highlighted stocks.")
+                    tracking = update_signal_journal_tracking()
+                    record_activity(
+                        f"Journal performance updated: {tracking['tracked']} tracked, "
+                        f"{tracking['completed']} completed, {tracking['failed']} failed.",
+                        "ok" if not tracking["failed"] else "warn",
+                    )
+                except Exception as exc:
+                    record_activity(f"Journal performance update failed: {exc}", "warn")
             one_hour_count = sum(row["timeframe"] == "1h" for row in results)
             one_day_count = sum(row["timeframe"] == "1d" for row in results)
             update_timeframe_results(results_by_timeframe)

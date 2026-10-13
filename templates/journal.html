@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>P-KAMA Signal Journal</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+:root{--bg:#0b0f13;--surface:#111820;--card:#16202b;--border:#1e2e3d;--accent:#00d8a4;--blue:#0099ff;--warn:#f59e0b;--red:#ff4d6d;--text:#e2eaf2;--muted:#7890a8;--mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+header{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:15px 20px;background:rgba(17,24,32,.96);border-bottom:1px solid var(--border);backdrop-filter:blur(12px)}
+.brand{font:700 14px var(--mono);color:var(--accent)}.brand span{color:var(--muted);font-weight:400}.back{color:var(--blue);text-decoration:none;font:600 11px var(--mono)}
+main{max-width:1500px;margin:auto;padding:24px 20px 50px}.eyebrow{font:600 10px var(--mono);letter-spacing:.15em;color:var(--accent);text-transform:uppercase}.hero{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:22px}.hero h1{font:700 clamp(25px,4vw,42px) var(--mono);margin:8px 0}.hero p{color:var(--muted);max-width:720px;line-height:1.6;margin:0}.update-note{font:10px var(--mono);color:var(--muted);white-space:nowrap}
+.tabs{display:flex;gap:8px;margin-bottom:16px}.tab,.export{border:1px solid var(--border);border-radius:8px;padding:10px 16px;background:var(--surface);color:var(--muted);font:600 11px var(--mono);cursor:pointer;text-decoration:none}.tab.active{border-color:var(--accent);color:var(--accent);background:rgba(0,216,164,.08)}.export{margin-left:auto;color:var(--blue)}
+.summary{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:22px}.metric{background:var(--surface);padding:16px}.metric label{display:block;color:var(--muted);font:9px var(--mono);letter-spacing:.11em;text-transform:uppercase;margin-bottom:7px}.metric strong{font:700 21px var(--mono)}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:15px 17px;border-bottom:1px solid var(--border)}.panel-head h2{margin:0;font:700 13px var(--mono)}.panel-head span{font:10px var(--mono);color:var(--muted)}
+.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:1200px}th{text-align:left;padding:11px 13px;color:var(--muted);font:600 9px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:#0e151c;white-space:nowrap}td{padding:12px 13px;border-top:1px solid var(--border);font:11px var(--mono);white-space:nowrap}tr:hover td{background:rgba(255,255,255,.015)}.symbol{font-size:13px;font-weight:700}.tag{display:inline-block;padding:3px 7px;border-radius:4px;background:rgba(0,153,255,.1);color:var(--blue);font-size:9px}.status{font-size:9px;padding:4px 7px;border-radius:10px}.tracking{color:var(--warn);background:rgba(245,158,11,.1)}.completed{color:var(--accent);background:rgba(0,216,164,.1)}.pos{color:var(--accent)}.neg{color:var(--red)}.muted{color:var(--muted)}
+.empty{padding:50px;text-align:center;color:var(--muted);font:12px var(--mono)}.footnote{color:var(--muted);font-size:11px;line-height:1.65;margin-top:10px}.error{color:var(--red)}
+@media(max-width:900px){main{padding:18px 12px}.hero{align-items:start;flex-direction:column}.summary{grid-template-columns:repeat(2,1fr)}.tabs{flex-wrap:wrap}.export{margin-left:0}.update-note{white-space:normal}}
+</style>
+</head>
+<body>
+<header><div class="brand">P-KAMA <span>/ SIGNAL JOURNAL</span></div><a class="back" href="/">← SCANNER</a></header>
+<main>
+  <section class="hero">
+    <div><div class="eyebrow">Swing-trade research</div><h1>Signal follow-through</h1><p>Every highlighted stock is retained inside the system and followed for 21 trading sessions. Returns are measured from the confirmed signal candle close.</p></div>
+    <div class="update-note" id="updateNote">Loading journal…</div>
+  </section>
+
+  <div class="tabs">
+    <button class="tab active" data-tf="all" onclick="setTimeframe('all')">ALL</button>
+    <button class="tab" data-tf="1h" onclick="setTimeframe('1h')">1H SIGNALS</button>
+    <button class="tab" data-tf="1d" onclick="setTimeframe('1d')">1D SIGNALS</button>
+    <a class="export" id="exportLink" href="/api/journal/download/all.csv">DOWNLOAD JOURNAL CSV</a>
+  </div>
+
+  <section class="summary">
+    <div class="metric"><label>Signals logged</label><strong id="mSignals">—</strong></div>
+    <div class="metric"><label>Tracking now</label><strong id="mTracking">—</strong></div>
+    <div class="metric"><label>Completed month</label><strong id="mCompleted">—</strong></div>
+    <div class="metric"><label>Positive now</label><strong id="mPositive">—</strong></div>
+    <div class="metric"><label>Avg current return</label><strong id="mAverage">—</strong></div>
+    <div class="metric"><label>21-day win rate</label><strong id="mWinRate">—</strong></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>HIGHLIGHTED STOCKS</h2><span>MFE = best high · MAE = worst low</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Stock</th><th>Identified</th><th>Entry</th><th>Latest</th><th>Current</th><th>Best / MFE</th><th>Worst / MAE</th><th>D1</th><th>D3</th><th>1W</th><th>2W</th><th>1M</th><th>Progress</th></tr></thead>
+      <tbody id="signalsBody"></tbody>
+    </table></div>
+    <div class="empty" id="signalsEmpty" style="display:none">No highlighted stocks have been stored for this timeframe yet.</div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>SCAN HISTORY</h2><span>Includes zero-signal scans</span></div>
+    <div class="table-wrap"><table style="min-width:760px">
+      <thead><tr><th>Scan time</th><th>Timeframe</th><th>Mode</th><th>Stocks checked</th><th>Signals found</th><th>Result</th></tr></thead>
+      <tbody id="scansBody"></tbody>
+    </table></div>
+    <div class="empty" id="scansEmpty" style="display:none">No scans have been recorded yet.</div>
+  </section>
+  <p class="footnote">Performance updates run after the post-close 1D scan. “1 month” means 21 completed NSE trading sessions, not 30 calendar days. These statistics are for evaluating the scanner; they are not trade recommendations.</p>
+</main>
+<script>
+let activeTimeframe='all';
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=v=>v===null||v===undefined?'—':`<span class="${Number(v)>=0?'pos':'neg'}">${Number(v)>=0?'+':''}${Number(v).toFixed(2)}%</span>`;
+const money=v=>v===null||v===undefined?'—':'₹'+Number(v).toFixed(2);
+const dateTime=v=>{if(!v)return '—';const d=new Date(v);return d.toLocaleString('en-IN',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'});};
+
+function setTimeframe(tf){
+  activeTimeframe=tf;
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tf===tf));
+  document.getElementById('exportLink').href=`/api/journal/download/${tf}.csv`;
+  loadJournal();
+}
+
+function renderSummary(s){
+  document.getElementById('mSignals').textContent=s.signals;
+  document.getElementById('mTracking').textContent=s.tracking;
+  document.getElementById('mCompleted').textContent=s.completed;
+  document.getElementById('mPositive').textContent=s.positive_now;
+  document.getElementById('mAverage').innerHTML=pct(s.average_current_return);
+  document.getElementById('mWinRate').innerHTML=s.one_month_win_rate===null?'—':pct(s.one_month_win_rate);
+}
+
+function renderSignals(rows){
+  const body=document.getElementById('signalsBody'),empty=document.getElementById('signalsEmpty');
+  body.innerHTML='';empty.style.display=rows.length?'none':'block';
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><span class="symbol">${esc(r.symbol)}</span><br><span class="tag">${esc(r.timeframe.toUpperCase())}</span></td>
+      <td>${dateTime(r.identified_at)}<br><span class="muted">candle ${dateTime(r.candle_time)}</span></td>
+      <td>${money(r.entry_price)}<br><span class="muted">KAMA ${money(r.pkama)} · ${Number(r.volume_ratio||0).toFixed(2)}x vol</span></td>
+      <td>${money(r.latest_price)}<br><span class="muted">${esc(r.latest_date||'Awaiting EOD')}</span></td>
+      <td>${pct(r.current_return_pct)}</td><td>${pct(r.best_move_pct)}</td><td>${pct(r.worst_move_pct)}</td>
+      <td>${pct(r.return_1d)}</td><td>${pct(r.return_3d)}</td><td>${pct(r.return_1w)}</td><td>${pct(r.return_2w)}</td><td>${pct(r.return_1m)}</td>
+      <td><span class="status ${r.status==='COMPLETED'?'completed':'tracking'}">${esc(r.status)}</span><br><span class="muted">${r.trading_days}/21 sessions</span></td>`;
+    body.appendChild(tr);
+  });
+}
+
+function renderScans(rows){
+  const body=document.getElementById('scansBody'),empty=document.getElementById('scansEmpty');
+  body.innerHTML='';empty.style.display=rows.length?'none':'block';
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${dateTime(r.scanned_at)}</td><td><span class="tag">${esc(r.timeframe.toUpperCase())}</span></td><td>${esc(r.scan_type.toUpperCase())}</td><td>${r.scanned_symbols}</td><td>${r.signal_count}</td><td class="${r.signal_count?'pos':'muted'}">${esc(r.status.replace('_',' '))}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+async function loadJournal(){
+  try{
+    const response=await fetch(`/api/journal?timeframe=${activeTimeframe}`);
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const data=await response.json();
+    renderSummary(data.summary);renderSignals(data.signals);renderScans(data.scans);
+    document.getElementById('updateNote').textContent=`${data.summary.scan_runs} recorded scans · refreshed ${new Date().toLocaleTimeString('en-IN')}`;
+  }catch(error){document.getElementById('updateNote').innerHTML=`<span class="error">Journal unavailable: ${esc(error.message)}</span>`;}
+}
+loadJournal();setInterval(loadJournal,60000);
+</script>
+</body>
+</html>
+
