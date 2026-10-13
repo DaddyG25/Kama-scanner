@@ -1,10 +1,8 @@
 """NIFTY 500 P-KAMA scanner for Railway and the Upstox API.
 
-The confirmed bullish condition is:
-  * the latest completed 60-minute candle crosses from below to above P-KAMA;
-  * that 60-minute candle has high volume;
-  * the latest completed daily candle crosses from below to above P-KAMA;
-  * that daily candle has high volume.
+The scanner produces two independent bullish lists in parallel:
+  * latest completed 60-minute candle crosses above P-KAMA with high volume;
+  * latest completed daily candle crosses above P-KAMA with high volume.
 
 The service is a scanner/alert system only. It never places orders.
 """
@@ -25,6 +23,7 @@ import secrets
 import smtplib
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as clock_time, timedelta
 from email.message import EmailMessage
 from urllib.parse import quote
@@ -77,6 +76,12 @@ _state = {
     "scan_progress_scanned": 0,
     "scan_progress_total": 0,
     "scan_progress_pct": 0,
+    "scan_progress_1h_scanned": 0,
+    "scan_progress_1h_total": 0,
+    "scan_progress_1h_pct": 0,
+    "scan_progress_1d_scanned": 0,
+    "scan_progress_1d_total": 0,
+    "scan_progress_1d_pct": 0,
     "last_email_fingerprint": None,
     "oauth_state": None,
 }
@@ -118,15 +123,32 @@ def begin_scan_progress(mode: str, slot: str | None = None) -> None:
         _state["scan_progress_scanned"] = 0
         _state["scan_progress_total"] = 0
         _state["scan_progress_pct"] = 0
+        for timeframe in ("1h", "1d"):
+            _state[f"scan_progress_{timeframe}_scanned"] = 0
+            _state[f"scan_progress_{timeframe}_total"] = 0
+            _state[f"scan_progress_{timeframe}_pct"] = 0
 
 
 def update_scan_progress(event: dict) -> None:
     if event.get("type") != "progress":
         return
+    timeframe = event.get("timeframe")
     with _progress_lock:
-        _state["scan_progress_scanned"] = int(event.get("scanned", 0))
-        _state["scan_progress_total"] = int(event.get("total", 0))
-        _state["scan_progress_pct"] = int(event.get("pct", 0))
+        if timeframe in {"1h", "1d"}:
+            _state[f"scan_progress_{timeframe}_scanned"] = int(event.get("scanned", 0))
+            _state[f"scan_progress_{timeframe}_total"] = int(event.get("total", 0))
+            _state[f"scan_progress_{timeframe}_pct"] = int(event.get("pct", 0))
+        _state["scan_progress_scanned"] = (
+            _state["scan_progress_1h_scanned"] + _state["scan_progress_1d_scanned"]
+        )
+        _state["scan_progress_total"] = (
+            _state["scan_progress_1h_total"] + _state["scan_progress_1d_total"]
+        )
+        percentages = [
+            _state["scan_progress_1h_pct"],
+            _state["scan_progress_1d_pct"],
+        ]
+        _state["scan_progress_pct"] = round(sum(percentages) / 2)
 
 
 def finish_scan_progress() -> None:
@@ -143,6 +165,16 @@ def scan_progress_snapshot() -> dict:
             "scanned": _state["scan_progress_scanned"],
             "total": _state["scan_progress_total"],
             "pct": _state["scan_progress_pct"],
+            "one_hour": {
+                "scanned": _state["scan_progress_1h_scanned"],
+                "total": _state["scan_progress_1h_total"],
+                "pct": _state["scan_progress_1h_pct"],
+            },
+            "one_day": {
+                "scanned": _state["scan_progress_1d_scanned"],
+                "total": _state["scan_progress_1d_total"],
+                "pct": _state["scan_progress_1d_pct"],
+            },
         }
 
 
@@ -350,84 +382,88 @@ def volume_ratio(volumes: list[float]) -> float:
     return volumes[-1] / previous_average if previous_average else 0.0
 
 
-def evaluate_signal(
-    hourly: list[dict],
-    daily: list[dict],
+def evaluate_timeframe_signal(
+    candles: list[dict],
+    timeframe: str,
     length: int,
     self_powered: bool,
     factor: float,
     vol_mult: float,
 ) -> dict | None:
-    hourly = completed_candles(hourly, "60minute")
-    daily = completed_candles(daily, "day")
-    if len(hourly) < max(length + 2, VOLUME_LENGTH + 1) or len(daily) < max(length + 2, VOLUME_LENGTH + 1):
+    interval = "60minute" if timeframe == "1h" else "day"
+    candles = completed_candles(candles, interval)
+    if len(candles) < max(length + 2, VOLUME_LENGTH + 1):
         return None
-    latest_hourly_stamp = hourly[-1]["date"]
-    if latest_hourly_stamp.tzinfo is None:
-        latest_hourly_stamp = latest_hourly_stamp.replace(tzinfo=IST)
-    latest_hourly_stamp = latest_hourly_stamp.astimezone(IST)
-    if datetime.now(IST) - latest_hourly_stamp > timedelta(hours=2):
-        return None
-
-    h_closes = [float(c["close"]) for c in hourly]
-    h_volumes = [float(c["volume"]) for c in hourly]
-    d_closes = [float(c["close"]) for c in daily]
-    d_volumes = [float(c["volume"]) for c in daily]
-    h_kama = calc_pkama(h_closes, length, self_powered, factor)
-    d_kama = calc_pkama(d_closes, length, self_powered, factor)
-
-    hp = h_kama[-2]
-    hc = h_kama[-1]
-    dp = d_kama[-2]
-    dc = d_kama[-1]
-    if math.isnan(hp) or math.isnan(hc) or math.isnan(dp) or math.isnan(dc):
+    latest_stamp = candles[-1]["date"]
+    if latest_stamp.tzinfo is None:
+        latest_stamp = latest_stamp.replace(tzinfo=IST)
+    latest_stamp = latest_stamp.astimezone(IST)
+    if timeframe == "1h" and datetime.now(IST) - latest_stamp > timedelta(hours=2):
         return None
 
-    hourly_cross = h_closes[-2] <= hp and h_closes[-1] > hc
-    hourly_volume = volume_ratio(h_volumes)
-    daily_cross = d_closes[-2] <= dp and d_closes[-1] > dc
-    daily_volume = volume_ratio(d_volumes)
-    if not (hourly_cross and hourly_volume >= vol_mult and daily_cross and daily_volume >= vol_mult):
+    closes = [float(c["close"]) for c in candles]
+    volumes = [float(c["volume"]) for c in candles]
+    kama = calc_pkama(closes, length, self_powered, factor)
+    previous_kama = kama[-2]
+    current_kama = kama[-1]
+    if math.isnan(previous_kama) or math.isnan(current_kama):
+        return None
+    crossed_above = closes[-2] <= previous_kama and closes[-1] > current_kama
+    current_volume_ratio = volume_ratio(volumes)
+    if not (crossed_above and current_volume_ratio >= vol_mult):
         return None
 
     return {
+        "timeframe": timeframe,
         "signal": "bullish",
-        "ltp": round(h_closes[-1], 2),
-        "pkama": round(hc, 2),
-        "pkama_1h": round(hc, 2),
-        "vol_ratio": round(hourly_volume, 2),
-        "vol_ratio_1h": round(hourly_volume, 2),
-        "dist_pct": round((h_closes[-1] - hc) / hc * 100, 2) if hc else 0,
-        "sig_time": hourly[-1]["date"].isoformat(),
-        "sig_time_1h": hourly[-1]["date"].isoformat(),
-        "daily_close": round(d_closes[-1], 2),
-        "pkama_1d": round(d_kama[-1], 2),
-        "vol_ratio_1d": round(daily_volume, 2),
-        "daily_time": daily[-1]["date"].isoformat(),
-        "spark_closes": [round(v, 2) for v in h_closes[-20:]],
-        "spark_kama": [None if math.isnan(v) else round(v, 2) for v in h_kama[-20:]],
+        "ltp": round(closes[-1], 2),
+        "pkama": round(current_kama, 2),
+        "vol_ratio": round(current_volume_ratio, 2),
+        "dist_pct": round((closes[-1] - current_kama) / current_kama * 100, 2) if current_kama else 0,
+        "sig_time": candles[-1]["date"].isoformat(),
+        "spark_closes": [round(value, 2) for value in closes[-20:]],
+        "spark_kama": [None if math.isnan(value) else round(value, 2) for value in kama[-20:]],
     }
 
 
-def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float, emit=None) -> list[dict]:
-    instruments = fetch_nifty500_instruments()
+def scan_timeframe(
+    timeframe: str,
+    instruments: dict[str, str],
+    length: int,
+    self_powered: bool,
+    factor: float,
+    vol_mult: float,
+    emit=None,
+) -> list[dict]:
     symbols = list(instruments)
     results = []
     total = len(symbols)
     for index, symbol in enumerate(symbols, 1):
         if emit:
-            emit({"type": "progress", "pct": round(index / total * 100), "scanned": index, "total": total})
+            emit(
+                {
+                    "type": "progress",
+                    "timeframe": timeframe,
+                    "pct": round(index / total * 100),
+                    "scanned": index,
+                    "total": total,
+                }
+            )
         instrument_key = instruments.get(symbol)
         if not instrument_key:
             continue
         try:
-            hourly = get_upstox_candles(
-                instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "60"))
+            if timeframe == "1h":
+                candles = get_upstox_candles(
+                    instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "60"))
+                )
+            else:
+                candles = get_upstox_candles(
+                    instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "365"))
+                )
+            signal = evaluate_timeframe_signal(
+                candles, timeframe, length, self_powered, factor, vol_mult
             )
-            daily = get_upstox_candles(
-                instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "365"))
-            )
-            signal = evaluate_signal(hourly, daily, length, self_powered, factor, vol_mult)
             if signal:
                 signal["symbol"] = symbol
                 results.append(signal)
@@ -436,14 +472,43 @@ def scan_market(length: int, self_powered: bool, factor: float, vol_mult: float,
         except Exception as exc:  # Continue scanning if one instrument fails.
             message = str(exc)
             invalid_key = "UDAPI100011" in message or "Invalid Instrument key" in message
-            logging.warning("%s scan failed: %s", symbol, message)
+            logging.warning("%s %s scan failed: %s", symbol, timeframe, message)
             if emit:
                 if invalid_key:
-                    emit({"type": "log", "msg": f"{symbol}: skipped because Upstox has no valid instrument key.", "cls": "warn"})
+                    emit({"type": "log", "msg": f"{symbol} [{timeframe.upper()}]: skipped because Upstox has no valid instrument key.", "cls": "warn"})
                 else:
-                    emit({"type": "log", "msg": f"{symbol}: {message}", "cls": "err"})
+                    emit({"type": "log", "msg": f"{symbol} [{timeframe.upper()}]: {message}", "cls": "err"})
         time.sleep(float(os.getenv("UPSTOX_THROTTLE_SECONDS", "0.35")))
     return results
+
+
+def scan_both_timeframes(
+    length: int, self_powered: bool, factor: float, vol_mult: float, emit=None
+) -> list[dict]:
+    """Run independent 1H and 1D scans concurrently and combine their signals."""
+    instruments = fetch_nifty500_instruments()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pkama-timeframe") as executor:
+        one_hour = executor.submit(
+            scan_timeframe,
+            "1h",
+            instruments,
+            length,
+            self_powered,
+            factor,
+            vol_mult,
+            emit,
+        )
+        one_day = executor.submit(
+            scan_timeframe,
+            "1d",
+            instruments,
+            length,
+            self_powered,
+            factor,
+            vol_mult,
+            emit,
+        )
+        return one_hour.result() + one_day.result()
 
 
 def send_signal_email(results: list[dict]) -> None:
@@ -454,22 +519,21 @@ def send_signal_email(results: list[dict]) -> None:
     recipients = [x.strip() for x in os.getenv("EMAIL_TO", "").split(",") if x.strip()]
     if not all([host, username, password, sender, recipients]):
         raise RuntimeError("SMTP configuration is incomplete")
-    lines = [
-        "Symbol,1H close,1H P-KAMA,1H volume ratio,Daily close,Daily P-KAMA,Daily volume ratio,1H candle,Daily candle"
-    ]
+    lines = ["Timeframe,Symbol,Close,P-KAMA,Volume ratio,Candle"]
     for row in results:
         lines.append(
-            f"{row['symbol']},{row['ltp']},{row['pkama_1h']},{row['vol_ratio_1h']},"
-            f"{row['daily_close']},{row['pkama_1d']},{row['vol_ratio_1d']},"
-            f"{row['sig_time_1h']},{row['daily_time']}"
+            f"{row['timeframe']},{row['symbol']},{row['ltp']},{row['pkama']},"
+            f"{row['vol_ratio']},{row['sig_time']}"
         )
     csv_text = "\n".join(lines) + "\n"
+    one_hour_count = sum(row["timeframe"] == "1h" for row in results)
+    one_day_count = sum(row["timeframe"] == "1d" for row in results)
     message = EmailMessage()
-    message["Subject"] = f"Confirmed P-KAMA signal: {len(results)} {INDEX_LABEL} stock(s)"
+    message["Subject"] = f"P-KAMA signals: {one_hour_count} 1H + {one_day_count} 1D"
     message["From"] = sender
     message["To"] = ", ".join(recipients)
-    message.set_content("The attached CSV contains stocks confirmed by both 1H and daily P-KAMA conditions. No orders were placed.")
-    message.add_attachment(csv_text.encode(), maintype="text", subtype="csv", filename="pkama_confirmed_signals.csv")
+    message.set_content("The attached CSV contains separate 1H and 1D P-KAMA crossover signals with high volume. No orders were placed.")
+    message.add_attachment(csv_text.encode(), maintype="text", subtype="csv", filename="pkama_timeframe_signals.csv")
     with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=30) as smtp:
         smtp.starttls()
         smtp.login(username, password)
@@ -477,16 +541,14 @@ def send_signal_email(results: list[dict]) -> None:
 
 
 RESULT_FIELDS = [
+    "timeframe",
     "symbol",
     "signal",
     "ltp",
-    "pkama_1h",
-    "vol_ratio_1h",
-    "daily_close",
-    "pkama_1d",
-    "vol_ratio_1d",
-    "sig_time_1h",
-    "daily_time",
+    "pkama",
+    "vol_ratio",
+    "dist_pct",
+    "sig_time",
 ]
 
 
@@ -539,7 +601,7 @@ def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict
 
 def fingerprint(results: list[dict]) -> str:
     value = json.dumps(
-        [(x["symbol"], x["sig_time_1h"], x["daily_time"]) for x in results], sort_keys=True
+        [(x["timeframe"], x["symbol"], x["sig_time"]) for x in results], sort_keys=True
     )
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -570,7 +632,7 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
                     {key: value for key, value in event.items() if key != "type"}
                 )
 
-        results = scan_market(
+        results = scan_both_timeframes(
             scan_params["length"],
             scan_params["self_powered"],
             scan_params["factor"],
@@ -579,14 +641,18 @@ def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
         )
         save_scan_results(results, "automatic", scan_params)
         scanned_count = len(fetch_nifty500_instruments())
+        one_hour_count = sum(row["timeframe"] == "1h" for row in results)
+        one_day_count = sum(row["timeframe"] == "1d" for row in results)
         _state["last_results"] = results
         _state["last_scanned_count"] = scanned_count
         _state["last_scan_time"] = datetime.now(IST).isoformat()
-        _state["last_scan_status"] = f"Automatic scan complete: {len(results)} confirmed signal(s)"
+        _state["last_scan_status"] = (
+            f"Automatic scan complete: {one_hour_count} 1H + {one_day_count} 1D signal(s)"
+        )
         notify_if_new(results)
         record_activity(
-            f"Automatic scan {slot_label} completed: {scanned_count} stocks scanned, "
-            f"{len(results)} confirmed signal(s); data autosaved.",
+            f"Automatic scan {slot_label} completed: 1H and 1D each scanned {scanned_count} stocks; "
+            f"{one_hour_count} 1H + {one_day_count} 1D signal(s); data autosaved.",
             "ok",
         )
     except Exception as exc:
@@ -771,7 +837,7 @@ def manual_scan():
     def worker():
         try:
             record_activity(f"Manual scan started for {INDEX_LABEL}.")
-            results = scan_market(length, self_powered, factor, vol_mult, emit=emit)
+            results = scan_both_timeframes(length, self_powered, factor, vol_mult, emit=emit)
             save_scan_results(
                 results,
                 "manual",
@@ -783,17 +849,28 @@ def manual_scan():
                 },
             )
             scanned_count = len(fetch_nifty500_instruments())
+            one_hour_count = sum(row["timeframe"] == "1h" for row in results)
+            one_day_count = sum(row["timeframe"] == "1d" for row in results)
             _state["last_results"] = results
             _state["last_scanned_count"] = scanned_count
             _state["last_scan_time"] = datetime.now(IST).isoformat()
-            _state["last_scan_status"] = f"Manual scan complete: {len(results)} confirmed signal(s)"
+            _state["last_scan_status"] = (
+                f"Manual scan complete: {one_hour_count} 1H + {one_day_count} 1D signal(s)"
+            )
             notify_if_new(results)
             record_activity(
-                f"Manual scan completed: {scanned_count} stocks scanned, "
-                f"{len(results)} confirmed signal(s); data autosaved.",
+                f"Manual scan completed: 1H and 1D each scanned {scanned_count} stocks; "
+                f"{one_hour_count} 1H + {one_day_count} 1D signal(s); data autosaved.",
                 "ok",
             )
-            events.put({"type": "done", "scanned": scanned_count})
+            events.put(
+                {
+                    "type": "done",
+                    "scanned": scanned_count,
+                    "scanned_1h": scanned_count,
+                    "scanned_1d": scanned_count,
+                }
+            )
         except Exception as exc:
             _state["last_scan_status"] = f"Scan error: {exc}"
             record_activity(f"Manual scan failed: {exc}", "err")
@@ -806,7 +883,7 @@ def manual_scan():
     threading.Thread(target=worker, daemon=True).start()
 
     def generate():
-        yield f"data: {json.dumps({'type': 'log', 'msg': f'Scanning {INDEX_LABEL} on 1H + daily confirmation…', 'cls': 'info'})}\n\n"
+        yield f"data: {json.dumps({'type': 'log', 'msg': f'Scanning {INDEX_LABEL}: independent 1H and 1D scans started together…', 'cls': 'info'})}\n\n"
         while True:
             event = events.get()
             if event is None:
