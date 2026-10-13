@@ -208,10 +208,10 @@ header{display:flex;align-items:center;justify-content:space-between;
 
 <!-- Stats -->
 <div class="stats-grid">
-  <div class="stat-box"><span class="stat-label">Scanned</span><span class="stat-value sv-d" id="sScanned">—</span></div>
-  <div class="stat-box"><span class="stat-label">Signals</span><span class="stat-value sv-w" id="sSignals">—</span></div>
-  <div class="stat-box"><span class="stat-label">▲ Bullish</span><span class="stat-value sv-b" id="sBull">—</span></div>
-  <div class="stat-box"><span class="stat-label">▼ Bearish</span><span class="stat-value sv-r" id="sBear">—</span></div>
+  <div class="stat-box"><span class="stat-label">1H Scanned</span><span class="stat-value sv-d" id="sScanned1h">—</span></div>
+  <div class="stat-box"><span class="stat-label">1D Scanned</span><span class="stat-value sv-d" id="sScanned1d">—</span></div>
+  <div class="stat-box"><span class="stat-label">1H Signals</span><span class="stat-value sv-b" id="sSignals1h">—</span></div>
+  <div class="stat-box"><span class="stat-label">1D Signals</span><span class="stat-value sv-w" id="sSignals1d">—</span></div>
 </div>
 
 <!-- Log -->
@@ -224,14 +224,14 @@ header{display:flex;align-items:center;justify-content:space-between;
 <!-- Filter tabs -->
 <div class="filter-tabs">
   <div class="ftab fa" id="fAll"  onclick="setFilter('all')">ALL</div>
-  <div class="ftab"    id="fBull" onclick="setFilter('bull')">▲ BULLISH</div>
-  <div class="ftab"    id="fBear" onclick="setFilter('bear')">▼ BEARISH</div>
+  <div class="ftab"    id="f1h" onclick="setFilter('1h')">1H SIGNALS</div>
+  <div class="ftab"    id="f1d" onclick="setFilter('1d')">1D SIGNALS</div>
 </div>
 
 <!-- Results -->
 <div class="results-wrap">
   <div class="results-hdr">
-    <span>1H CROSS + 1D CONFIRMATION + HIGH VOLUME</span>
+    <span>SEPARATE 1H + 1D P-KAMA CROSS + HIGH VOLUME</span>
     <span><a href="/api/download/latest.csv" id="downloadLink">DOWNLOAD SAVED CSV</a> &nbsp; <span id="resCount">0 signals</span></span>
   </div>
   <div id="cardContainer">
@@ -245,6 +245,8 @@ let evtSource    = null;
 let activeFilter = 'all';
 let lastSavedAt   = null;
 let lastActivityId = 0;
+let manualProgress = {oneHour:0,oneDay:0,pct1h:0,pct1d:0,total1h:500,total1d:500};
+let tokenConnected = document.getElementById('tokenBadge').classList.contains('ok');
 
 function appendLogLine(msg, cls='', timestamp=null){
   const area = document.getElementById('logArea');
@@ -274,14 +276,16 @@ function syncScanProgress(scan){
   const scanBtn=document.getElementById('scanBtn');
   const progWrap=document.getElementById('progWrap');
   const progFill=document.getElementById('progFill');
+  const oneHour=scan.one_hour||{};
+  const oneDay=scan.one_day||{};
   if(scan.running){
     const label=scan.mode==='automatic'?'AUTO SCAN':'MANUAL SCAN';
     scanBtn.disabled=true;
-    scanBtn.textContent=`${label} ${scan.scanned||0}/${scan.total||500}`;
+    scanBtn.textContent=`${label} · 1H ${oneHour.scanned||0}/${oneHour.total||500} · 1D ${oneDay.scanned||0}/${oneDay.total||500}`;
     progWrap.style.display='block';
     progFill.style.width=(scan.pct||0)+'%';
-    updateStats(scan.scanned||0);
-  }else if(!evtSource){
+    updateStats({oneHour:oneHour.scanned||0,oneDay:oneDay.scanned||0});
+  }else if(!evtSource && tokenConnected){
     scanBtn.disabled=false;
     scanBtn.textContent='▶ START SCAN';
     setTimeout(()=>{
@@ -320,8 +324,8 @@ function drawSpark(canvas, closes, kamas, signal){
 
 function renderCards(){
   let rows=allResults.filter(r=>{
-    if(activeFilter==='bull') return r.signal==='bullish';
-    if(activeFilter==='bear') return r.signal==='bearish';
+    if(activeFilter==='1h') return r.timeframe==='1h';
+    if(activeFilter==='1d') return r.timeframe==='1d';
     return true;
   });
   rows.sort((a,b)=>b.vol_ratio-a.vol_ratio);
@@ -348,7 +352,7 @@ function renderCards(){
     card.innerHTML=`
       <div class="card-top">
         <span class="card-sym">${r.symbol}</span>
-        <span class="${isBull?'card-sig-bull':'card-sig-bear'}">${isBull?'▲ BULLISH':'▼ BEARISH'}</span>
+        <span class="${isBull?'card-sig-bull':'card-sig-bear'}">${r.timeframe.toUpperCase()} · ▲ CROSS</span>
       </div>
       <div class="card-row">
         <div class="card-stat">
@@ -365,36 +369,35 @@ function renderCards(){
         </div>
         <div class="card-stat">
           <span class="cs-label">Vol Ratio</span>
-          <span class="cs-value ${r.vol_ratio_1h>=2?'cv-bull':'cv-warn'}">1H ${r.vol_ratio_1h.toFixed(2)}x</span>
-        </div>
-        <div class="card-stat">
-          <span class="cs-label">Daily Confirm</span>
-          <span class="cs-value cv-bull">₹${r.daily_close.toFixed(2)} / ${r.vol_ratio_1d.toFixed(2)}x</span>
+          <span class="cs-value ${r.vol_ratio>=2?'cv-bull':'cv-warn'}">${r.vol_ratio.toFixed(2)}x</span>
         </div>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <canvas id="sp_${r.symbol}" style="border-radius:4px"></canvas>
+        <canvas id="sp_${r.timeframe}_${r.symbol}" style="border-radius:4px"></canvas>
         <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${timeStr}</span>
       </div>
     `;
     container.appendChild(card);
-    const cvs=document.getElementById('sp_'+r.symbol);
+    const cvs=document.getElementById(`sp_${r.timeframe}_${r.symbol}`);
     if(cvs) drawSpark(cvs,r.spark_closes,r.spark_kama,r.signal);
   });
 }
 
 function updateStats(scanned){
-  const bulls=allResults.filter(r=>r.signal==='bullish').length;
-  const bears=allResults.filter(r=>r.signal==='bearish').length;
-  if(scanned!=null) document.getElementById('sScanned').textContent=scanned;
-  document.getElementById('sSignals').textContent=allResults.length||'—';
-  document.getElementById('sBull').textContent=bulls||'—';
-  document.getElementById('sBear').textContent=bears||'—';
+  const oneHourSignals=allResults.filter(r=>r.timeframe==='1h').length;
+  const oneDaySignals=allResults.filter(r=>r.timeframe==='1d').length;
+  if(scanned){
+    document.getElementById('sScanned1h').textContent=scanned.oneHour;
+    document.getElementById('sScanned1d').textContent=scanned.oneDay;
+  }
+  document.getElementById('sSignals1h').textContent=oneHourSignals||'—';
+  document.getElementById('sSignals1d').textContent=oneDaySignals||'—';
 }
 
 function startScan(){
   allResults=[];
-  updateStats(0);
+  manualProgress={oneHour:0,oneDay:0,pct1h:0,pct1d:0,total1h:500,total1d:500};
+  updateStats({oneHour:0,oneDay:0});
   renderCards();
   log('Manual scan requested.','info');
   document.getElementById('scanBtn').disabled=true;
@@ -418,12 +421,18 @@ function startScan(){
     const d=JSON.parse(e.data);
     if(d.type==='log') log(d.msg,d.cls||'');
     else if(d.type==='progress'){
-      document.getElementById('progFill').style.width=d.pct+'%';
-      updateStats(d.scanned);
+      if(d.timeframe==='1h'){
+        manualProgress.oneHour=d.scanned; manualProgress.pct1h=d.pct; manualProgress.total1h=d.total;
+      }else{
+        manualProgress.oneDay=d.scanned; manualProgress.pct1d=d.pct; manualProgress.total1d=d.total;
+      }
+      document.getElementById('progFill').style.width=((manualProgress.pct1h+manualProgress.pct1d)/2)+'%';
+      document.getElementById('scanBtn').textContent=`MANUAL SCAN · 1H ${manualProgress.oneHour}/${manualProgress.total1h} · 1D ${manualProgress.oneDay}/${manualProgress.total1d}`;
+      updateStats(manualProgress);
     }
     else if(d.type==='signal'){
       // Skip if we already have this symbol (dedup)
-      const key = d.symbol + '_' + d.signal + '_' + d.sig_time_1h;
+      const key = d.timeframe + '_' + d.symbol + '_' + d.signal + '_' + d.sig_time;
       if(!seenSymbols.has(key)){
         seenSymbols.add(key);
         allResults.push(d);
@@ -435,7 +444,7 @@ function startScan(){
       scanDone=true;
       evtSource.close();  // explicitly close — prevents browser auto-reconnect
       evtSource=null;
-      endScan(d.scanned);
+      endScan({oneHour:d.scanned_1h,oneDay:d.scanned_1d});
     }
     else if(d.type==='error'){
       log(d.msg,'err');
@@ -474,8 +483,8 @@ function endScan(scanned){
 function setFilter(f){
   activeFilter=f;
   document.getElementById('fAll').className ='ftab'+(f==='all'?' fa':'');
-  document.getElementById('fBull').className='ftab'+(f==='bull'?' fb':'');
-  document.getElementById('fBear').className='ftab'+(f==='bear'?' fr':'');
+  document.getElementById('f1h').className='ftab'+(f==='1h'?' fb':'');
+  document.getElementById('f1d').className='ftab'+(f==='1d'?' fr':'');
   renderCards();
 }
 
@@ -492,11 +501,13 @@ setInterval(async()=>{
   const okBanner=document.getElementById('tokenOkBanner');
   const scanBtn=document.getElementById('scanBtn');
   if(d.set){
+    tokenConnected=true;
     badge.className='badge ok'; badge.textContent='✓ LOGGED IN';
     banner.classList.add('hidden');
     okBanner.classList.remove('hidden');
     syncScanProgress(d.scan);
   } else {
+    tokenConnected=false;
     badge.className='badge no'; badge.textContent='NOT LOGGED IN';
     banner.classList.remove('hidden');
     okBanner.classList.add('hidden');
@@ -511,7 +522,9 @@ async function pollAutomaticResults(){
     const d=await r.json();
     if(Array.isArray(d.results) && !evtSource){
       allResults=d.results;
-      updateStats(d.scanned||0);
+      const oneHour=d.scan&&d.scan.one_hour?d.scan.one_hour.scanned:(d.scanned||0);
+      const oneDay=d.scan&&d.scan.one_day?d.scan.one_day.scanned:(d.scanned||0);
+      updateStats({oneHour,oneDay});
       renderCards();
     }
     syncActivity(d.activity_log);
