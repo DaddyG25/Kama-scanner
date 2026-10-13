@@ -63,6 +63,8 @@ _state = {
     "access_token": None,
     "token_time": None,
     "last_results": [],
+    "last_results_1h": [],
+    "last_results_1d": [],
     "last_scan_time": None,
     "last_scan_status": "Waiting for Upstox login",
     "last_scanned_count": 0,
@@ -71,6 +73,7 @@ _state = {
     "activity_log": [],
     "activity_seq": 0,
     "scan_running": False,
+    "scan_timeframes": [],
     "scan_mode": None,
     "scan_slot": None,
     "scan_progress_scanned": 0,
@@ -84,11 +87,13 @@ _state = {
     "scan_progress_1d_pct": 0,
     "last_email_fingerprint": None,
     "oauth_state": None,
+    "daily_scan_date": None,
 }
 _universe_cache: dict[str, str] = {}
 _scan_lock = threading.Lock()
 _activity_lock = threading.Lock()
 _progress_lock = threading.Lock()
+_journal_lock = threading.Lock()
 _scheduler_started = False
 
 
@@ -115,15 +120,16 @@ def record_activity(message: str, cls: str = "info") -> None:
         logging.info(message)
 
 
-def begin_scan_progress(mode: str, slot: str | None = None) -> None:
+def begin_scan_progress(mode: str, slot: str | None = None, timeframes=("1h", "1d")) -> None:
     with _progress_lock:
         _state["scan_running"] = True
+        _state["scan_timeframes"] = list(timeframes)
         _state["scan_mode"] = mode
         _state["scan_slot"] = slot
         _state["scan_progress_scanned"] = 0
         _state["scan_progress_total"] = 0
         _state["scan_progress_pct"] = 0
-        for timeframe in ("1h", "1d"):
+        for timeframe in timeframes:
             _state[f"scan_progress_{timeframe}_scanned"] = 0
             _state[f"scan_progress_{timeframe}_total"] = 0
             _state[f"scan_progress_{timeframe}_pct"] = 0
@@ -145,15 +151,16 @@ def update_scan_progress(event: dict) -> None:
             _state["scan_progress_1h_total"] + _state["scan_progress_1d_total"]
         )
         percentages = [
-            _state["scan_progress_1h_pct"],
-            _state["scan_progress_1d_pct"],
+            _state[f"scan_progress_{timeframe}_pct"]
+            for timeframe in _state["scan_timeframes"]
         ]
-        _state["scan_progress_pct"] = round(sum(percentages) / 2)
+        _state["scan_progress_pct"] = round(sum(percentages) / len(percentages)) if percentages else 0
 
 
 def finish_scan_progress() -> None:
     with _progress_lock:
         _state["scan_running"] = False
+        _state["scan_timeframes"] = []
 
 
 def scan_progress_snapshot() -> dict:
@@ -162,6 +169,7 @@ def scan_progress_snapshot() -> dict:
             "running": _state["scan_running"],
             "mode": _state["scan_mode"],
             "slot": _state["scan_slot"],
+            "timeframes": list(_state["scan_timeframes"]),
             "scanned": _state["scan_progress_scanned"],
             "total": _state["scan_progress_total"],
             "pct": _state["scan_progress_pct"],
@@ -330,13 +338,21 @@ def get_upstox_candles(instrument_key: str, unit: str, interval: str, days: int)
     url = f"{UPSTOX_API_BASE}/v3/historical-candle/{encoded_key}/{unit}/{interval}/{to_date}/{from_date}"
     candles = parse_upstox_candles(upstox_json(url))
 
-    # Historical data can omit today's still-forming session. Merge the current
-    # intraday feed so the latest completed 1-hour candle is available.
-    if unit == "hours":
+    # Historical data can omit today's session. Merge Upstox's current-day
+    # endpoint so the latest completed hourly or post-close daily candle is
+    # available. For daily data, deduplicate by trading date because the two
+    # endpoints can use different start-of-candle timestamps.
+    if unit in {"hours", "days"}:
         intraday_url = f"{UPSTOX_API_BASE}/v3/historical-candle/intraday/{encoded_key}/{unit}/{interval}"
         candles.extend(parse_upstox_candles(upstox_json(intraday_url)))
 
-    unique = {c["date"].isoformat(): c for c in candles}
+    if unit == "days":
+        unique = {
+            c["date"].astimezone(IST).date().isoformat(): c
+            for c in candles
+        }
+    else:
+        unique = {c["date"].isoformat(): c for c in candles}
     return [unique[key] for key in sorted(unique)]
 
 
@@ -400,6 +416,8 @@ def evaluate_timeframe_signal(
     latest_stamp = latest_stamp.astimezone(IST)
     if timeframe == "1h" and datetime.now(IST) - latest_stamp > timedelta(hours=2):
         return None
+    if timeframe == "1d" and latest_stamp.date() != datetime.now(IST).date():
+        return None
 
     closes = [float(c["close"]) for c in candles]
     volumes = [float(c["volume"]) for c in candles]
@@ -455,11 +473,11 @@ def scan_timeframe(
         try:
             if timeframe == "1h":
                 candles = get_upstox_candles(
-                    instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "60"))
+                    instrument_key, "hours", "1", int(os.getenv("HOURLY_LOOKBACK_DAYS", "90"))
                 )
             else:
                 candles = get_upstox_candles(
-                    instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "365"))
+                    instrument_key, "days", "1", int(os.getenv("DAILY_LOOKBACK_DAYS", "3650"))
                 )
             signal = evaluate_timeframe_signal(
                 candles, timeframe, length, self_powered, factor, vol_mult
@@ -482,33 +500,27 @@ def scan_timeframe(
     return results
 
 
-def scan_both_timeframes(
-    length: int, self_powered: bool, factor: float, vol_mult: float, emit=None
-) -> list[dict]:
-    """Run independent 1H and 1D scans concurrently and combine their signals."""
+def scan_timeframes(
+    timeframes, length: int, self_powered: bool, factor: float, vol_mult: float, emit=None
+) -> dict[str, list[dict]]:
+    """Run the requested timeframe scans, concurrently when both are requested."""
     instruments = fetch_nifty500_instruments()
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pkama-timeframe") as executor:
-        one_hour = executor.submit(
-            scan_timeframe,
-            "1h",
-            instruments,
-            length,
-            self_powered,
-            factor,
-            vol_mult,
-            emit,
-        )
-        one_day = executor.submit(
-            scan_timeframe,
-            "1d",
-            instruments,
-            length,
-            self_powered,
-            factor,
-            vol_mult,
-            emit,
-        )
-        return one_hour.result() + one_day.result()
+    requested = tuple(dict.fromkeys(timeframes))
+    with ThreadPoolExecutor(max_workers=len(requested), thread_name_prefix="pkama-timeframe") as executor:
+        futures = {
+            timeframe: executor.submit(
+                scan_timeframe,
+                timeframe,
+                instruments,
+                length,
+                self_powered,
+                factor,
+                vol_mult,
+                emit,
+            )
+            for timeframe in requested
+        }
+        return {timeframe: future.result() for timeframe, future in futures.items()}
 
 
 def send_signal_email(results: list[dict]) -> None:
@@ -551,6 +563,101 @@ RESULT_FIELDS = [
     "sig_time",
 ]
 
+JOURNAL_FIELDS = [
+    "scan_id",
+    "scan_date",
+    "scan_time",
+    "scan_type",
+    "timeframe",
+    "status",
+    "scanned_symbols",
+    "signal_count",
+    "symbol",
+    "close",
+    "pkama",
+    "volume_ratio",
+    "distance_pct",
+    "candle_time",
+    "pkama_length",
+    "volume_multiplier",
+]
+
+
+def write_atomically(path: str, content: str) -> None:
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(content)
+    os.replace(temp_path, path)
+
+
+def update_timeframe_results(results_by_timeframe: dict[str, list[dict]]) -> None:
+    """Replace only the timeframe that ran, preserving the other latest list."""
+    for timeframe, results in results_by_timeframe.items():
+        _state[f"last_results_{timeframe}"] = results
+    _state["last_results"] = _state["last_results_1h"] + _state["last_results_1d"]
+
+
+def append_timeframe_journal(
+    timeframe: str,
+    results: list[dict],
+    scan_type: str,
+    params: dict,
+    scanned_symbols: int,
+) -> list[str]:
+    """Append one auditable journal entry for every scan, including zero-signal runs."""
+    directory = os.getenv("SCAN_DATA_DIR", "data")
+    journal_directory = os.path.join(directory, "journals")
+    os.makedirs(journal_directory, exist_ok=True)
+    saved_at = datetime.now(IST)
+    scan_id = saved_at.strftime("%Y%m%d_%H%M%S_%f")
+    common = {
+        "scan_id": scan_id,
+        "scan_date": saved_at.date().isoformat(),
+        "scan_time": saved_at.strftime("%H:%M:%S %Z"),
+        "scan_type": scan_type,
+        "timeframe": timeframe,
+        "scanned_symbols": scanned_symbols,
+        "signal_count": len(results),
+        "pkama_length": params["length"],
+        "volume_multiplier": params["vol_mult"],
+    }
+    rows = []
+    for result in results:
+        rows.append(
+            {
+                **common,
+                "status": "SIGNAL",
+                "symbol": result.get("symbol", ""),
+                "close": result.get("ltp", ""),
+                "pkama": result.get("pkama", ""),
+                "volume_ratio": result.get("vol_ratio", ""),
+                "distance_pct": result.get("dist_pct", ""),
+                "candle_time": result.get("sig_time", ""),
+            }
+        )
+    if not rows:
+        rows.append({**common, "status": "NO_SIGNALS"})
+
+    cumulative_path = os.path.join(journal_directory, f"journal_{timeframe}.csv")
+    daily_path = os.path.join(
+        journal_directory, f"journal_{timeframe}_{saved_at.date().isoformat()}.csv"
+    )
+    latest_path = os.path.join(journal_directory, f"latest_{timeframe}.csv")
+    with _journal_lock:
+        for path in (cumulative_path, daily_path):
+            exists = os.path.exists(path) and os.path.getsize(path) > 0
+            with open(path, "a", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=JOURNAL_FIELDS, extrasaction="ignore")
+                if not exists:
+                    writer.writeheader()
+                writer.writerows(rows)
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=JOURNAL_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        write_atomically(latest_path, output.getvalue())
+    return [cumulative_path, daily_path, latest_path]
+
 
 def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict:
     """Save each completed scan as timestamped JSON/CSV and update latest copies."""
@@ -574,12 +681,6 @@ def save_scan_results(results: list[dict], scan_type: str, params: dict) -> dict
         "results": results,
     }
     json_text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-    def write_atomically(path: str, content: str) -> None:
-        temp_path = f"{path}.tmp"
-        with open(temp_path, "w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
-        os.replace(temp_path, path)
 
     json_path = os.path.join(directory, f"scan_{stamp}.json")
     csv_path = os.path.join(directory, f"scan_{stamp}.csv")
@@ -606,59 +707,105 @@ def fingerprint(results: list[dict]) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def run_automatic_scan(scheduled_for: datetime | None = None) -> None:
+def run_automatic_scan(
+    scheduled_for: datetime | None = None, timeframes=("1h",)
+) -> None:
+    timeframes = tuple(dict.fromkeys(timeframes))
     slot_label = scheduled_for.strftime("%H:%M") if scheduled_for else "scheduled"
+    timeframe_label = " + ".join(timeframe.upper() for timeframe in timeframes)
     if not _state["access_token"]:
-        record_activity(f"Automatic scan {slot_label} skipped: Upstox login is not active.", "warn")
+        record_activity(
+            f"Automatic {timeframe_label} scan {slot_label} skipped: Upstox login is not active.",
+            "warn",
+        )
         return
     if not _scan_lock.acquire(blocking=False):
-        record_activity(f"Automatic scan {slot_label} skipped: another scan is still running.", "warn")
+        record_activity(
+            f"Automatic {timeframe_label} scan {slot_label} waiting: another scan is still running.",
+            "warn",
+        )
         return
-    begin_scan_progress("automatic", slot_label)
-    _state["last_results"] = []
+    if "1d" in timeframes:
+        _state["daily_scan_date"] = datetime.now(IST).date().isoformat()
+    begin_scan_progress("automatic", slot_label, timeframes)
+    update_timeframe_results({timeframe: [] for timeframe in timeframes})
     _state["last_scanned_count"] = 0
-    record_activity(f"Automatic scan {slot_label} started for {INDEX_LABEL}.")
+    record_activity(
+        f"Automatic {timeframe_label} scan {slot_label} started for {INDEX_LABEL}."
+    )
     try:
         scan_params = {
             "length": int(os.getenv("PKAMA_LENGTH", "50")),
             "self_powered": os.getenv("PKAMA_SELF_POWERED", "true").lower() == "true",
             "factor": float(os.getenv("PKAMA_FACTOR", "3")),
             "vol_mult": float(os.getenv("VOLUME_MULTIPLIER", "1.5")),
+            "timeframes": list(timeframes),
         }
         def track_progress(event: dict) -> None:
             update_scan_progress(event)
             if event.get("type") == "signal":
-                _state["last_results"].append(
-                    {key: value for key, value in event.items() if key != "type"}
-                )
+                timeframe = event.get("timeframe")
+                if timeframe in timeframes:
+                    _state[f"last_results_{timeframe}"].append(
+                        {key: value for key, value in event.items() if key != "type"}
+                    )
+                    _state["last_results"] = (
+                        _state["last_results_1h"] + _state["last_results_1d"]
+                    )
 
-        results = scan_both_timeframes(
+        results_by_timeframe = scan_timeframes(
+            timeframes,
             scan_params["length"],
             scan_params["self_powered"],
             scan_params["factor"],
             scan_params["vol_mult"],
             emit=track_progress,
         )
+        results = [
+            result
+            for timeframe in timeframes
+            for result in results_by_timeframe[timeframe]
+        ]
+        update_timeframe_results(results_by_timeframe)
         save_scan_results(results, "automatic", scan_params)
         scanned_count = len(fetch_nifty500_instruments())
+        journal_files = []
+        for timeframe in timeframes:
+            journal_files.extend(
+                append_timeframe_journal(
+                    timeframe,
+                    results_by_timeframe[timeframe],
+                    "automatic",
+                    scan_params,
+                    scanned_count,
+                )
+            )
+        _state["last_saved_files"].extend(journal_files)
         one_hour_count = sum(row["timeframe"] == "1h" for row in results)
         one_day_count = sum(row["timeframe"] == "1d" for row in results)
-        _state["last_results"] = results
         _state["last_scanned_count"] = scanned_count
         _state["last_scan_time"] = datetime.now(IST).isoformat()
         _state["last_scan_status"] = (
-            f"Automatic scan complete: {one_hour_count} 1H + {one_day_count} 1D signal(s)"
+            f"Automatic {timeframe_label} scan complete: "
+            f"{one_hour_count} 1H + {one_day_count} 1D signal(s)"
         )
-        notify_if_new(results)
+        try:
+            notify_if_new(results)
+        except Exception as exc:
+            record_activity(f"Signal email could not be sent: {exc}", "warn")
         record_activity(
-            f"Automatic scan {slot_label} completed: 1H and 1D each scanned {scanned_count} stocks; "
-            f"{one_hour_count} 1H + {one_day_count} 1D signal(s); data autosaved.",
+            f"Automatic {timeframe_label} scan {slot_label} completed: {scanned_count} stocks; "
+            f"{one_hour_count} 1H + {one_day_count} 1D signal(s); journal autosaved.",
             "ok",
         )
     except Exception as exc:
         logging.exception("Automatic scan failed")
         _state["last_scan_status"] = f"Scan error: {exc}"
-        record_activity(f"Automatic scan {slot_label} failed: {exc}", "err")
+        if "1d" in timeframes:
+            _state["daily_scan_date"] = None
+        record_activity(
+            f"Automatic {timeframe_label} scan {slot_label} failed: {exc}", "err"
+        )
     finally:
         finish_scan_progress()
         _scan_lock.release()
@@ -672,7 +819,8 @@ def notify_if_new(results: list[dict]) -> None:
 
 
 def scheduler_loop() -> None:
-    last_slot = None
+    last_slot_key = None
+    daily_wait_logged_date = None
     while True:
         now = datetime.now(IST)
         # A NIFTY 500 scan makes roughly 1,500 historical-data requests
@@ -688,13 +836,48 @@ def scheduler_loop() -> None:
         first_slot = interval_minutes + delay_minutes
         due = market_minutes >= first_slot and (market_minutes - first_slot) % interval_minutes < 5
         slot = (market_minutes - first_slot) // interval_minutes if due else None
-        market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 40)
-        if market_open and due and slot != last_slot:
-            last_slot = slot
+        market_open = now.weekday() < 5 and clock_time(9, 15) <= now.time() <= clock_time(15, 25)
+        slot_key = (now.date().isoformat(), slot) if due else None
+        if market_open and due and slot_key != last_slot_key:
+            last_slot_key = slot_key
             session_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
             scheduled_for = session_start + timedelta(minutes=first_slot + slot * interval_minutes)
-            record_activity(f"Scheduled slot {scheduled_for.strftime('%H:%M')} reached.")
-            threading.Thread(target=run_automatic_scan, args=(scheduled_for,), daemon=True).start()
+            record_activity(f"Scheduled 1H slot {scheduled_for.strftime('%H:%M')} reached.")
+            threading.Thread(
+                target=run_automatic_scan,
+                args=(scheduled_for, ("1h",)),
+                daemon=True,
+            ).start()
+
+        # The daily candle is scanned once only, after Upstox has had a few
+        # minutes to publish the completed 15:30 NSE cash-session candle.
+        today = now.date().isoformat()
+        daily_due = (
+            now.weekday() < 5
+            and clock_time(15, 35) <= now.time() <= clock_time(16, 30)
+            and _state["daily_scan_date"] != today
+        )
+        if daily_due:
+            if not _state["access_token"]:
+                if daily_wait_logged_date != today:
+                    daily_wait_logged_date = today
+                    record_activity(
+                        "Post-close 1D scan is waiting for Upstox login.", "warn"
+                    )
+            elif not _scan_lock.locked():
+                daily_for = now.replace(hour=15, minute=35, second=0, microsecond=0)
+                record_activity("Post-close 1D scan slot 15:35 reached.")
+                threading.Thread(
+                    target=run_automatic_scan,
+                    args=(daily_for, ("1d",)),
+                    daemon=True,
+                ).start()
+            elif daily_wait_logged_date != today:
+                daily_wait_logged_date = today
+                record_activity(
+                    "Post-close 1D scan is queued until the current 1H/manual scan finishes.",
+                    "warn",
+                )
         time.sleep(20)
 
 
@@ -702,7 +885,10 @@ def start_scheduler() -> None:
     global _scheduler_started
     if not _scheduler_started:
         _scheduler_started = True
-        record_activity("Automatic scheduler active for 10:16, 11:16, 12:16, 13:16, 14:16 and 15:16 IST.")
+        record_activity(
+            "Automatic scheduler active: 1H at 10:16, 11:16, 12:16, 13:16, 14:16 and 15:16; "
+            "1D once post-close at 15:35 IST."
+        )
         threading.Thread(target=scheduler_loop, daemon=True, name="p-kama-scheduler").start()
 
 
@@ -808,6 +994,23 @@ def download_latest_results():
     return send_file(path, mimetype="text/csv", as_attachment=True, download_name="pkama_latest_results.csv")
 
 
+@app.route("/api/download/journal/<timeframe>.csv")
+def download_journal(timeframe: str):
+    if timeframe not in {"1h", "1d"}:
+        return jsonify({"error": "Timeframe must be 1h or 1d."}), 400
+    path = os.path.join(
+        os.getenv("SCAN_DATA_DIR", "data"), "journals", f"journal_{timeframe}.csv"
+    )
+    if not os.path.exists(path):
+        return jsonify({"error": f"No {timeframe.upper()} journal has been saved yet."}), 404
+    return send_file(
+        path,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"pkama_{timeframe}_journal.csv",
+    )
+
+
 @app.route("/api/scan")
 def manual_scan():
     if not _state["access_token"]:
@@ -825,6 +1028,8 @@ def manual_scan():
     self_powered = request.args.get("self_powered", "true").lower() == "true"
     factor = float(request.args.get("factor", 3.0))
     vol_mult = float(request.args.get("vol_mult", 1.5))
+    now = datetime.now(IST)
+    timeframes = ("1h", "1d") if now.time() >= clock_time(15, 35) else ("1h",)
 
     events = queue.Queue()
 
@@ -832,43 +1037,74 @@ def manual_scan():
         update_scan_progress(event)
         events.put(event)
 
-    begin_scan_progress("manual")
+    begin_scan_progress("manual", timeframes=timeframes)
 
     def worker():
         try:
-            record_activity(f"Manual scan started for {INDEX_LABEL}.")
-            results = scan_both_timeframes(length, self_powered, factor, vol_mult, emit=emit)
+            timeframe_label = " + ".join(timeframe.upper() for timeframe in timeframes)
+            if "1d" not in timeframes:
+                record_activity(
+                    "Manual 1D scan skipped before 15:35 IST; the daily candle is not confirmed yet.",
+                    "warn",
+                )
+            record_activity(f"Manual {timeframe_label} scan started for {INDEX_LABEL}.")
+            results_by_timeframe = scan_timeframes(
+                timeframes, length, self_powered, factor, vol_mult, emit=emit
+            )
+            results = [
+                result
+                for timeframe in timeframes
+                for result in results_by_timeframe[timeframe]
+            ]
+            scan_params = {
+                "length": length,
+                "self_powered": self_powered,
+                "factor": factor,
+                "vol_mult": vol_mult,
+                "timeframes": list(timeframes),
+            }
             save_scan_results(
                 results,
                 "manual",
-                {
-                    "length": length,
-                    "self_powered": self_powered,
-                    "factor": factor,
-                    "vol_mult": vol_mult,
-                },
+                scan_params,
             )
             scanned_count = len(fetch_nifty500_instruments())
+            journal_files = []
+            for timeframe in timeframes:
+                journal_files.extend(
+                    append_timeframe_journal(
+                        timeframe,
+                        results_by_timeframe[timeframe],
+                        "manual",
+                        scan_params,
+                        scanned_count,
+                    )
+                )
+            _state["last_saved_files"].extend(journal_files)
             one_hour_count = sum(row["timeframe"] == "1h" for row in results)
             one_day_count = sum(row["timeframe"] == "1d" for row in results)
-            _state["last_results"] = results
+            update_timeframe_results(results_by_timeframe)
             _state["last_scanned_count"] = scanned_count
             _state["last_scan_time"] = datetime.now(IST).isoformat()
             _state["last_scan_status"] = (
-                f"Manual scan complete: {one_hour_count} 1H + {one_day_count} 1D signal(s)"
+                f"Manual {timeframe_label} scan complete: "
+                f"{one_hour_count} 1H + {one_day_count} 1D signal(s)"
             )
-            notify_if_new(results)
+            try:
+                notify_if_new(results)
+            except Exception as exc:
+                record_activity(f"Signal email could not be sent: {exc}", "warn")
             record_activity(
-                f"Manual scan completed: 1H and 1D each scanned {scanned_count} stocks; "
-                f"{one_hour_count} 1H + {one_day_count} 1D signal(s); data autosaved.",
+                f"Manual {timeframe_label} scan completed: {scanned_count} stocks; "
+                f"{one_hour_count} 1H + {one_day_count} 1D signal(s); journal autosaved.",
                 "ok",
             )
             events.put(
                 {
                     "type": "done",
                     "scanned": scanned_count,
-                    "scanned_1h": scanned_count,
-                    "scanned_1d": scanned_count,
+                    "scanned_1h": scanned_count if "1h" in timeframes else 0,
+                    "scanned_1d": scanned_count if "1d" in timeframes else 0,
                 }
             )
         except Exception as exc:
@@ -883,7 +1119,9 @@ def manual_scan():
     threading.Thread(target=worker, daemon=True).start()
 
     def generate():
-        yield f"data: {json.dumps({'type': 'log', 'msg': f'Scanning {INDEX_LABEL}: independent 1H and 1D scans started together…', 'cls': 'info'})}\n\n"
+        timeframe_label = " + ".join(timeframe.upper() for timeframe in timeframes)
+        yield f"data: {json.dumps({'type': 'start', 'timeframes': list(timeframes)})}\n\n"
+        yield f"data: {json.dumps({'type': 'log', 'msg': f'Scanning {INDEX_LABEL}: {timeframe_label} scan started…', 'cls': 'info'})}\n\n"
         while True:
             event = events.get()
             if event is None:
