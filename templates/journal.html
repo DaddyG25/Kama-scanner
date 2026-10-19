@@ -10,114 +10,163 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
 header{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:15px 20px;background:rgba(17,24,32,.96);border-bottom:1px solid var(--border);backdrop-filter:blur(12px)}
 .brand{font:700 14px var(--mono);color:var(--accent)}.brand span{color:var(--muted);font-weight:400}.back{color:var(--blue);text-decoration:none;font:600 11px var(--mono)}
-main{max-width:1500px;margin:auto;padding:24px 20px 50px}.eyebrow{font:600 10px var(--mono);letter-spacing:.15em;color:var(--accent);text-transform:uppercase}.hero{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:22px}.hero h1{font:700 clamp(25px,4vw,42px) var(--mono);margin:8px 0}.hero p{color:var(--muted);max-width:720px;line-height:1.6;margin:0}.update-note{font:10px var(--mono);color:var(--muted);white-space:nowrap}
-.tabs{display:flex;gap:8px;margin-bottom:16px}.tab,.export{border:1px solid var(--border);border-radius:8px;padding:10px 16px;background:var(--surface);color:var(--muted);font:600 11px var(--mono);cursor:pointer;text-decoration:none}.tab.active{border-color:var(--accent);color:var(--accent);background:rgba(0,216,164,.08)}.export{margin-left:auto;color:var(--blue)}
-.summary{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:22px}.metric{background:var(--surface);padding:16px}.metric label{display:block;color:var(--muted);font:9px var(--mono);letter-spacing:.11em;text-transform:uppercase;margin-bottom:7px}.metric strong{font:700 21px var(--mono)}
-.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:15px 17px;border-bottom:1px solid var(--border)}.panel-head h2{margin:0;font:700 13px var(--mono)}.panel-head span{font:10px var(--mono);color:var(--muted)}
-.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:1200px}th{text-align:left;padding:11px 13px;color:var(--muted);font:600 9px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:#0e151c;white-space:nowrap}td{padding:12px 13px;border-top:1px solid var(--border);font:11px var(--mono);white-space:nowrap}tr:hover td{background:rgba(255,255,255,.015)}.symbol{font-size:13px;font-weight:700}.tag{display:inline-block;padding:3px 7px;border-radius:4px;background:rgba(0,153,255,.1);color:var(--blue);font-size:9px}.status{font-size:9px;padding:4px 7px;border-radius:10px}.tracking{color:var(--warn);background:rgba(245,158,11,.1)}.completed{color:var(--accent);background:rgba(0,216,164,.1)}.pos{color:var(--accent)}.neg{color:var(--red)}.muted{color:var(--muted)}
-.empty{padding:50px;text-align:center;color:var(--muted);font:12px var(--mono)}.footnote{color:var(--muted);font-size:11px;line-height:1.65;margin-top:10px}.error{color:var(--red)}
-@media(max-width:900px){main{padding:18px 12px}.hero{align-items:start;flex-direction:column}.summary{grid-template-columns:repeat(2,1fr)}.tabs{flex-wrap:wrap}.export{margin-left:0}.update-note{white-space:normal}}
+main{max-width:1560px;margin:auto;padding:24px 20px 50px}.eyebrow{font:600 10px var(--mono);letter-spacing:.15em;color:var(--accent);text-transform:uppercase}.hero{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:22px}.hero h1{font:700 clamp(25px,4vw,42px) var(--mono);margin:8px 0}.hero p{color:var(--muted);max-width:790px;line-height:1.6;margin:0}.update-note{font:10px var(--mono);color:var(--muted);white-space:nowrap}
+.tabs{display:flex;gap:8px;margin-bottom:14px}.tab,.export{border:1px solid var(--border);border-radius:8px;padding:11px 18px;background:var(--surface);color:var(--muted);font:600 11px var(--mono);cursor:pointer;text-decoration:none}.tab.active{border-color:var(--accent);color:var(--accent);background:rgba(0,216,164,.08)}.export{margin-left:auto;color:var(--blue)}
+.month-nav{display:flex;align-items:center;gap:10px;padding:14px 15px;margin-bottom:18px;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:auto}.month-label{font:600 9px var(--mono);letter-spacing:.12em;color:var(--muted);white-space:nowrap;text-transform:uppercase;margin-right:3px}.month-buttons{display:flex;gap:8px}.month-button{border:1px solid var(--border);border-radius:20px;padding:8px 13px;background:var(--bg);color:var(--muted);font:600 10px var(--mono);white-space:nowrap;cursor:pointer}.month-button.active{border-color:var(--blue);color:#bfe5ff;background:rgba(0,153,255,.1)}
+.summary{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:22px}.metric{background:var(--surface);padding:16px}.metric label{display:block;color:var(--muted);font:9px var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:7px}.metric strong{font:700 21px var(--mono)}
+.month-heading{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:27px 2px 13px}.month-heading h2{font:700 20px var(--mono);margin:0}.month-heading p{margin:4px 0 0;color:var(--muted);font-size:11px}.month-count{font:10px var(--mono);color:var(--muted);white-space:nowrap}
+.day-group{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px}.day-group[open]{border-color:#294055}.day-summary{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:16px 18px;cursor:pointer;list-style:none}.day-summary::-webkit-details-marker{display:none}.day-summary::after{content:'+';font:700 18px var(--mono);color:var(--blue)}.day-group[open]>.day-summary::after{content:'−'}.day-title{font:700 15px var(--mono)}.day-meta{display:flex;gap:8px;align-items:center;margin-left:auto}.count-pill{padding:5px 8px;border-radius:12px;background:rgba(0,216,164,.08);color:var(--accent);font:600 9px var(--mono)}.count-pill.scan{background:rgba(0,153,255,.08);color:var(--blue)}
+.day-content{border-top:1px solid var(--border)}.section-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#0e151c}.section-head h3{margin:0;font:700 10px var(--mono);letter-spacing:.1em;color:var(--muted)}.section-head span{font:9px var(--mono);color:var(--muted)}
+.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:1200px}th{text-align:left;padding:10px 12px;color:var(--muted);font:600 9px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:#0d1319;white-space:nowrap}td{padding:12px;border-top:1px solid var(--border);font:11px var(--mono);white-space:nowrap}tr:hover td{background:rgba(255,255,255,.015)}.symbol{font-size:13px;font-weight:700}.tag{display:inline-block;padding:3px 7px;border-radius:4px;background:rgba(0,153,255,.1);color:var(--blue);font-size:9px}.status{font-size:9px;padding:4px 7px;border-radius:10px}.tracking{color:var(--warn);background:rgba(245,158,11,.1)}.completed{color:var(--accent);background:rgba(0,216,164,.1)}.pos{color:var(--accent)}.neg{color:var(--red)}.muted{color:var(--muted)}
+.scan-table{min-width:720px}.day-empty{padding:16px;color:var(--muted);font:10px var(--mono);border-top:1px solid var(--border)}.empty-month{padding:70px 20px;text-align:center;color:var(--muted);font:12px var(--mono);background:var(--surface);border:1px dashed var(--border);border-radius:12px}.empty-month strong{display:block;color:var(--text);font-size:14px;margin-bottom:8px}.footnote{color:var(--muted);font-size:11px;line-height:1.65;margin-top:18px}.error{color:var(--red)}
+@media(max-width:1100px){.summary{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:700px){main{padding:18px 12px}.hero{align-items:start;flex-direction:column}.summary{grid-template-columns:repeat(2,1fr)}.tabs{flex-wrap:wrap}.export{margin-left:0;width:100%;text-align:center}.update-note{white-space:normal}.day-summary{padding:14px 12px;gap:8px;align-items:flex-start}.day-meta{flex-direction:column;align-items:flex-end}.month-heading{align-items:start;flex-direction:column}.month-count{white-space:normal}}
 </style>
 </head>
 <body>
 <header><div class="brand">P-KAMA <span>/ SIGNAL JOURNAL</span></div><a class="back" href="/">← SCANNER</a></header>
 <main>
   <section class="hero">
-    <div><div class="eyebrow">Swing-trade research</div><h1>Signal follow-through</h1><p>Every highlighted stock is retained inside the system and followed for 21 trading sessions. Returns are measured from the confirmed signal candle close.</p></div>
+    <div><div class="eyebrow">Swing-trade research</div><h1>Signal follow-through</h1><p>Browse the 1H and 1D journals separately by month and signal date. Each stock stays under its original identification date while its performance continues updating for 21 completed trading sessions.</p></div>
     <div class="update-note" id="updateNote">Loading journal…</div>
   </section>
 
   <div class="tabs">
-    <button class="tab active" data-tf="all" onclick="setTimeframe('all')">ALL</button>
-    <button class="tab" data-tf="1h" onclick="setTimeframe('1h')">1H SIGNALS</button>
-    <button class="tab" data-tf="1d" onclick="setTimeframe('1d')">1D SIGNALS</button>
-    <a class="export" id="exportLink" href="/api/journal/download/all.csv">DOWNLOAD JOURNAL CSV</a>
+    <button class="tab active" data-tf="1h" onclick="setTimeframe('1h')">1H JOURNAL</button>
+    <button class="tab" data-tf="1d" onclick="setTimeframe('1d')">1D JOURNAL</button>
+    <a class="export" id="exportLink" href="/api/journal/download/1h.csv">DOWNLOAD 1H JOURNAL CSV</a>
   </div>
 
+  <nav class="month-nav" aria-label="Journal month">
+    <span class="month-label">Select month</span>
+    <div class="month-buttons" id="monthButtons"></div>
+  </nav>
+
   <section class="summary">
-    <div class="metric"><label>Signals logged</label><strong id="mSignals">—</strong></div>
+    <div class="metric"><label>Signals in month</label><strong id="mSignals">—</strong></div>
+    <div class="metric"><label>Scan runs</label><strong id="mScans">—</strong></div>
     <div class="metric"><label>Tracking now</label><strong id="mTracking">—</strong></div>
-    <div class="metric"><label>Completed month</label><strong id="mCompleted">—</strong></div>
+    <div class="metric"><label>Completed 21D</label><strong id="mCompleted">—</strong></div>
     <div class="metric"><label>Positive now</label><strong id="mPositive">—</strong></div>
     <div class="metric"><label>Avg current return</label><strong id="mAverage">—</strong></div>
     <div class="metric"><label>21-day win rate</label><strong id="mWinRate">—</strong></div>
   </section>
 
-  <section class="panel">
-    <div class="panel-head"><h2>HIGHLIGHTED STOCKS</h2><span>MFE = best high · MAE = worst low</span></div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Stock</th><th>Identified</th><th>Entry</th><th>Latest</th><th>Current</th><th>Best / MFE</th><th>Worst / MAE</th><th>D1</th><th>D3</th><th>1W</th><th>2W</th><th>1M</th><th>Progress</th></tr></thead>
-      <tbody id="signalsBody"></tbody>
-    </table></div>
-    <div class="empty" id="signalsEmpty" style="display:none">No highlighted stocks have been stored for this timeframe yet.</div>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head"><h2>SCAN HISTORY</h2><span>Includes zero-signal scans</span></div>
-    <div class="table-wrap"><table style="min-width:760px">
-      <thead><tr><th>Scan time</th><th>Timeframe</th><th>Mode</th><th>Stocks checked</th><th>Signals found</th><th>Result</th></tr></thead>
-      <tbody id="scansBody"></tbody>
-    </table></div>
-    <div class="empty" id="scansEmpty" style="display:none">No scans have been recorded yet.</div>
-  </section>
-  <p class="footnote">Performance updates run after the post-close 1D scan. “1 month” means 21 completed NSE trading sessions, not 30 calendar days. These statistics are for evaluating the scanner; they are not trade recommendations.</p>
+  <div class="month-heading">
+    <div><h2 id="monthTitle">—</h2><p id="monthSubtitle">Signals are grouped by their identification date.</p></div>
+    <div class="month-count" id="monthCount"></div>
+  </div>
+  <section id="dayGroups"></section>
+  <section class="empty-month" id="emptyMonth" style="display:none"><strong>No journal activity in this month</strong>Completed scans and new signals will appear here automatically.</section>
+  <p class="footnote">A stock remains grouped under the month and date when it was first identified; its Latest, Current, MFE, MAE and milestone returns keep updating since that signal. “1 month” means 21 completed NSE trading sessions, not 30 calendar days. These statistics are for evaluating the scanner; they are not trade recommendations.</p>
 </main>
 <script>
-let activeTimeframe='all';
+let activeTimeframe='1h';
+let activeMonth=null;
+let journalData={signals:[],scans:[]};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>v===null||v===undefined?'—':`<span class="${Number(v)>=0?'pos':'neg'}">${Number(v)>=0?'+':''}${Number(v).toFixed(2)}%</span>`;
 const money=v=>v===null||v===undefined?'—':'₹'+Number(v).toFixed(2);
-const dateTime=v=>{if(!v)return '—';const d=new Date(v);return d.toLocaleString('en-IN',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'});};
+const asDate=v=>v?new Date(v):null;
+const monthKey=v=>{const d=asDate(v);return d&&!Number.isNaN(d.valueOf())?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`:null;};
+const dayKey=v=>{const d=asDate(v);return d&&!Number.isNaN(d.valueOf())?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:null;};
+const monthLabel=key=>{const [y,m]=key.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});};
+const dayLabel=key=>{const [y,m,d]=key.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString('en-IN',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});};
+const timeOnly=v=>{if(!v)return '—';return new Date(v).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});};
+const dateTime=v=>{if(!v)return '—';return new Date(v).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'});};
 
 function setTimeframe(tf){
   activeTimeframe=tf;
+  activeMonth=null;
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tf===tf));
-  document.getElementById('exportLink').href=`/api/journal/download/${tf}.csv`;
+  const exportLink=document.getElementById('exportLink');
+  exportLink.href=`/api/journal/download/${tf}.csv`;
+  exportLink.textContent=`DOWNLOAD ${tf.toUpperCase()} JOURNAL CSV`;
   loadJournal();
 }
 
-function renderSummary(s){
-  document.getElementById('mSignals').textContent=s.signals;
-  document.getElementById('mTracking').textContent=s.tracking;
-  document.getElementById('mCompleted').textContent=s.completed;
-  document.getElementById('mPositive').textContent=s.positive_now;
-  document.getElementById('mAverage').innerHTML=pct(s.average_current_return);
-  document.getElementById('mWinRate').innerHTML=s.one_month_win_rate===null?'—':pct(s.one_month_win_rate);
+function availableMonths(){
+  const keys=new Set();
+  journalData.signals.forEach(r=>{const key=monthKey(r.identified_at);if(key)keys.add(key);});
+  journalData.scans.forEach(r=>{const key=monthKey(r.scanned_at);if(key)keys.add(key);});
+  if(!keys.size){const now=new Date();keys.add(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);}
+  return [...keys].sort().reverse();
 }
 
-function renderSignals(rows){
-  const body=document.getElementById('signalsBody'),empty=document.getElementById('signalsEmpty');
-  body.innerHTML='';empty.style.display=rows.length?'none':'block';
-  rows.forEach(r=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td><span class="symbol">${esc(r.symbol)}</span><br><span class="tag">${esc(r.timeframe.toUpperCase())}</span></td>
-      <td>${dateTime(r.identified_at)}<br><span class="muted">candle ${dateTime(r.candle_time)}</span></td>
-      <td>${money(r.entry_price)}<br><span class="muted">KAMA ${money(r.pkama)} · ${Number(r.volume_ratio||0).toFixed(2)}x vol</span></td>
-      <td>${money(r.latest_price)}<br><span class="muted">${esc(r.latest_date||'Awaiting EOD')}</span></td>
-      <td>${pct(r.current_return_pct)}</td><td>${pct(r.best_move_pct)}</td><td>${pct(r.worst_move_pct)}</td>
-      <td>${pct(r.return_1d)}</td><td>${pct(r.return_3d)}</td><td>${pct(r.return_1w)}</td><td>${pct(r.return_2w)}</td><td>${pct(r.return_1m)}</td>
-      <td><span class="status ${r.status==='COMPLETED'?'completed':'tracking'}">${esc(r.status)}</span><br><span class="muted">${r.trading_days}/21 sessions</span></td>`;
-    body.appendChild(tr);
-  });
+function renderMonthNav(){
+  const months=availableMonths();
+  if(!activeMonth||!months.includes(activeMonth))activeMonth=months[0];
+  document.getElementById('monthButtons').innerHTML=months.map(key=>`<button class="month-button ${key===activeMonth?'active':''}" onclick="selectMonth('${key}')">${esc(monthLabel(key))}</button>`).join('');
 }
 
-function renderScans(rows){
-  const body=document.getElementById('scansBody'),empty=document.getElementById('scansEmpty');
-  body.innerHTML='';empty.style.display=rows.length?'none':'block';
-  rows.forEach(r=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${dateTime(r.scanned_at)}</td><td><span class="tag">${esc(r.timeframe.toUpperCase())}</span></td><td>${esc(r.scan_type.toUpperCase())}</td><td>${r.scanned_symbols}</td><td>${r.signal_count}</td><td class="${r.signal_count?'pos':'muted'}">${esc(r.status.replace('_',' '))}</td>`;
-    body.appendChild(tr);
-  });
+function selectMonth(key){activeMonth=key;renderMonthNav();renderMonth();}
+
+function monthRows(){
+  return {
+    signals:journalData.signals.filter(r=>monthKey(r.identified_at)===activeMonth),
+    scans:journalData.scans.filter(r=>monthKey(r.scanned_at)===activeMonth)
+  };
+}
+
+function renderSummary(signals,scans){
+  const completed=signals.filter(r=>r.status==='COMPLETED');
+  const current=signals.map(r=>r.current_return_pct).filter(v=>v!==null&&v!==undefined).map(Number);
+  const oneMonth=completed.map(r=>r.return_1m).filter(v=>v!==null&&v!==undefined).map(Number);
+  const average=current.length?current.reduce((a,b)=>a+b,0)/current.length:null;
+  const winRate=oneMonth.length?oneMonth.filter(v=>v>0).length*100/oneMonth.length:null;
+  document.getElementById('mSignals').textContent=signals.length;
+  document.getElementById('mScans').textContent=scans.length;
+  document.getElementById('mTracking').textContent=signals.filter(r=>r.status!=='COMPLETED').length;
+  document.getElementById('mCompleted').textContent=completed.length;
+  document.getElementById('mPositive').textContent=current.filter(v=>v>0).length;
+  document.getElementById('mAverage').innerHTML=pct(average);
+  document.getElementById('mWinRate').innerHTML=pct(winRate);
+}
+
+function signalRows(rows){
+  if(!rows.length)return '<div class="day-empty">No new signals were identified on this date.</div>';
+  const body=rows.map(r=>`<tr><td><span class="symbol">${esc(r.symbol)}</span><br><span class="tag">${esc(r.timeframe.toUpperCase())}</span></td>
+    <td>${timeOnly(r.identified_at)}<br><span class="muted">candle ${dateTime(r.candle_time)}</span></td>
+    <td>${money(r.entry_price)}<br><span class="muted">KAMA ${money(r.pkama)} · ${Number(r.volume_ratio||0).toFixed(2)}x vol</span></td>
+    <td>${money(r.latest_price)}<br><span class="muted">${esc(r.latest_date||'Awaiting EOD')}</span></td>
+    <td>${pct(r.current_return_pct)}</td><td>${pct(r.best_move_pct)}</td><td>${pct(r.worst_move_pct)}</td>
+    <td>${pct(r.return_1d)}</td><td>${pct(r.return_3d)}</td><td>${pct(r.return_1w)}</td><td>${pct(r.return_2w)}</td><td>${pct(r.return_1m)}</td>
+    <td><span class="status ${r.status==='COMPLETED'?'completed':'tracking'}">${esc(r.status)}</span><br><span class="muted">${r.trading_days}/21 sessions</span></td></tr>`).join('');
+  return `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Signal time</th><th>Entry</th><th>Latest</th><th>Current</th><th>Best / MFE</th><th>Worst / MAE</th><th>D1</th><th>D3</th><th>1W</th><th>2W</th><th>1M</th><th>Progress</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function scanRows(rows){
+  if(!rows.length)return '<div class="day-empty">No completed scan was stored on this date.</div>';
+  const body=rows.map(r=>`<tr><td>${timeOnly(r.scanned_at)}</td><td>${esc(r.scan_type.toUpperCase())}</td><td>${r.scanned_symbols}</td><td>${r.signal_count}</td><td class="${r.signal_count?'pos':'muted'}">${esc(String(r.status||'').replaceAll('_',' '))}</td></tr>`).join('');
+  return `<div class="table-wrap"><table class="scan-table"><thead><tr><th>Scan time</th><th>Mode</th><th>Stocks checked</th><th>Signals found</th><th>Result</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderMonth(){
+  const {signals,scans}=monthRows();
+  renderSummary(signals,scans);
+  document.getElementById('monthTitle').textContent=`${activeTimeframe.toUpperCase()} · ${monthLabel(activeMonth)}`;
+  document.getElementById('monthSubtitle').textContent='Grouped by identification date; every stock continues tracking from its own signal price.';
+  document.getElementById('monthCount').textContent=`${signals.length} SIGNAL${signals.length===1?'':'S'} · ${scans.length} SCAN${scans.length===1?'':'S'}`;
+  const days=new Set();
+  signals.forEach(r=>{const key=dayKey(r.identified_at);if(key)days.add(key);});
+  scans.forEach(r=>{const key=dayKey(r.scanned_at);if(key)days.add(key);});
+  const sorted=[...days].sort().reverse();
+  const container=document.getElementById('dayGroups'),empty=document.getElementById('emptyMonth');
+  empty.style.display=sorted.length?'none':'block';
+  container.innerHTML=sorted.map((key,index)=>{
+    const daySignals=signals.filter(r=>dayKey(r.identified_at)===key);
+    const dayScans=scans.filter(r=>dayKey(r.scanned_at)===key);
+    return `<details class="day-group" ${index===0?'open':''}><summary class="day-summary"><span class="day-title">${esc(dayLabel(key))}</span><span class="day-meta"><span class="count-pill">${daySignals.length} signal${daySignals.length===1?'':'s'}</span><span class="count-pill scan">${dayScans.length} scan${dayScans.length===1?'':'s'}</span></span></summary><div class="day-content"><div class="section-head"><h3>SIGNALS IDENTIFIED THIS DATE</h3><span>Tracking shown since entry</span></div>${signalRows(daySignals)}<div class="section-head"><h3>SCAN RUNS THIS DATE</h3><span>Includes zero-signal scans</span></div>${scanRows(dayScans)}</div></details>`;
+  }).join('');
 }
 
 async function loadJournal(){
   try{
     const response=await fetch(`/api/journal?timeframe=${activeTimeframe}`);
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
-    const data=await response.json();
-    renderSummary(data.summary);renderSignals(data.signals);renderScans(data.scans);
-    document.getElementById('updateNote').textContent=`${data.summary.scan_runs} recorded scans · refreshed ${new Date().toLocaleTimeString('en-IN')}`;
+    journalData=await response.json();
+    renderMonthNav();renderMonth();
+    document.getElementById('updateNote').textContent=`${journalData.scans.length} ${activeTimeframe.toUpperCase()} scans stored · refreshed ${new Date().toLocaleTimeString('en-IN')}`;
   }catch(error){document.getElementById('updateNote').innerHTML=`<span class="error">Journal unavailable: ${esc(error.message)}</span>`;}
 }
 loadJournal();setInterval(loadJournal,60000);
